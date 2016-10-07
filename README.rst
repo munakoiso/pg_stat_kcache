@@ -14,12 +14,15 @@ pg_stat_ucache
 ---------------
 
 Gather statistics about physical disk access and CPU consumption
-done by backends per UID.
+done by backends per UID. This extension automatically loaded with
+pg_stat_kcache and shares internal statistics gathered from
+``getrusage()`` delta.
 
 UID number is collected by parsing a query comment in form
 of ``</><*> <uid:><number> <*></>``. Comment may include additional
 information, which will be ignored by parser. If no UID is
-specified, then statement will be skipped.
+specified, then statement will be skipped
+(but not for pg_stat_kcache).
 
 ``pg_stat_ucache.max`` configuration variable defines a maximum
 number of records to track.
@@ -27,8 +30,6 @@ number of records to track.
 The extension exports ``pg_stat_ucache()``, ``pg_stat_ucache_reset()`` functions and
 ``pg_stat_ucache``, ``pg_stat_ucache_detail`` views.
 
-This extension automatically loaded with pg_stat_kcache and shares
-internal statistics gathered from ``getrusage()`` delta.
 
 Installation
 ============
