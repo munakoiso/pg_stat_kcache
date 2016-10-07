@@ -216,7 +216,7 @@ _PG_init(void)
 	/* set pgsk_max if needed */
 	pgsk_setmax();
 	RequestAddinShmemSpace(pgsk_memsize());
-#if PG_VERSION_NUM >= 90600
+#if PG_VERSION_NUM >= 90500
 	RequestNamedLWLockTranche("pg_stat_kcache", 1);
 #else
 	RequestAddinLWLocks(1);
@@ -294,7 +294,7 @@ pgsk_shmem_startup(void)
 	if (!found)
 	{
 		/* First time through ... */
-#if PG_VERSION_NUM >= 90600
+#if PG_VERSION_NUM >= 90500
 		pgsk->lock = &(GetNamedLWLockTranche("pg_stat_kcache"))->lock;
 #else
 		pgsk->lock = LWLockAssign();
