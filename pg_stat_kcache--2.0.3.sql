@@ -63,7 +63,7 @@ CREATE FUNCTION pg_stat_ucache_reset()
     LANGUAGE c COST 1000
     AS '$libdir/pg_stat_kcache', 'pg_stat_ucache_reset';
 
-CREATE VIEW pg_stat_ucache_detail AS
+CREATE VIEW pg_stat_ucache AS
 SELECT k.uid,
        k.reads AS reads,
        k.reads/(current_setting('block_size')::integer) AS reads_blks,
@@ -73,16 +73,6 @@ SELECT k.uid,
        k.system_time
   FROM pg_stat_ucache() k;
 
-CREATE VIEW pg_stat_ucache AS
-SELECT SUM(reads) AS reads,
-       SUM(reads_blks) AS reads_blks,
-       SUM(writes) AS writes,
-       SUM(writes_blks) AS writes_blks,
-       SUM(user_time) AS user_time,
-       SUM(system_time) AS system_time
-  FROM pg_stat_ucache_detail;
-
-GRANT SELECT ON pg_stat_ucache_detail TO public;
 GRANT SELECT ON pg_stat_ucache TO public;
 GRANT ALL ON FUNCTION pg_stat_ucache() TO public;
 REVOKE ALL ON FUNCTION pg_stat_ucache_reset() FROM public;

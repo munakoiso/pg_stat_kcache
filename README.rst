@@ -28,7 +28,7 @@ specified, then statement will be skipped
 number of records to track.
 
 The extension exports ``pg_stat_ucache()``, ``pg_stat_ucache_reset()`` functions and
-``pg_stat_ucache``, ``pg_stat_ucache_detail`` views.
+``pg_stat_ucache`` view.
 
 
 Installation
@@ -220,27 +220,6 @@ pg_stat_ucache view
 | reads_blks  | bigint            | Number of 8K blocks read by the filesystem layer    |
 +-------------+-------------------+-----------------------------------------------------+
 | writes      | bigint            | Number of blocks written by the filesystem layer    |
-+-------------+-------------------+-----------------------------------------------------+
-| writes_blks | bigint            | Number of 8K blocks written by the filesystem layer |
-+-------------+-------------------+-----------------------------------------------------+
-| user_time   | double precision  | User CPU time used                                  |
-+-------------+-------------------+-----------------------------------------------------+
-| system_time | double precision  | System CPU time used                                |
-+-------------+-------------------+-----------------------------------------------------+
-
-pg_stat_ucache_detail view
---------------------------
-
-+-------------+-------------------+-----------------------------------------------------+
-| Name        | Type              | Description                                         |
-+=============+===================+=====================================================+
-| uid         | bigint            | UID number                                          |
-+-------------+-------------------+-----------------------------------------------------+
-| reads       | bigint            | Number of bytes read by the filesystem layer        |
-+-------------+-------------------+-----------------------------------------------------+
-| reads_blks  | bigint            | Number of 8K blocks read by the filesystem layer    |
-+-------------+-------------------+-----------------------------------------------------+
-| writes      | bigint            | Number of bytes written by the filesystem layer     |
 +-------------+-------------------+-----------------------------------------------------+
 | writes_blks | bigint            | Number of 8K blocks written by the filesystem layer |
 +-------------+-------------------+-----------------------------------------------------+
