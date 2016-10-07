@@ -27,6 +27,9 @@ number of records to track.
 The extension exports ``pg_stat_ucache()``, ``pg_stat_ucache_reset()`` functions and
 ``pg_stat_ucache``, ``pg_stat_ucache_detail`` views.
 
+This extension automatically loaded with pg_stat_kcache and shares
+internal statistics gathered from ``getrusage()`` delta.
+
 Installation
 ============
 
@@ -62,11 +65,10 @@ every database where you need to access the statistics::
 
  mydb=# CREATE EXTENSION pg_stat_kcache;
 
-Usage
-=====
+pg_stat_kcache Usage
+====================
 
-pg_stat_kcache create several objects. pg_stat_ucache objects has the same
-semantics with the addition of ``uid bigint`` column.
+pg_stat_kcache create several objects.
 
 pg_stat_kcache view
 -------------------
@@ -197,6 +199,87 @@ It provides the following columns:
 | nvcsws      | bigint            | Number of voluntary context switches             |
 +-------------+-------------------+--------------------------------------------------+
 | nivcsws     | bigint            | Number of involuntary context switches           |
++-------------+-------------------+--------------------------------------------------+
+
+pg_stat_ucache Usage
+====================
+
+pg_stat_ucache create several objects.
+
+pg_stat_ucache view
+-------------------
+
++-------------+-------------------+-----------------------------------------------------+
+| Name        | Type              | Description                                         |
++=============+===================+=====================================================+
+| uid         | bigint            | UID number                                          |
++-------------+-------------------+-----------------------------------------------------+
+| reads       | bigint            | Number of blocks read by the filesystem layer       |
++-------------+-------------------+-----------------------------------------------------+
+| reads_blks  | bigint            | Number of 8K blocks read by the filesystem layer    |
++-------------+-------------------+-----------------------------------------------------+
+| writes      | bigint            | Number of blocks written by the filesystem layer    |
++-------------+-------------------+-----------------------------------------------------+
+| writes_blks | bigint            | Number of 8K blocks written by the filesystem layer |
++-------------+-------------------+-----------------------------------------------------+
+| user_time   | double precision  | User CPU time used                                  |
++-------------+-------------------+-----------------------------------------------------+
+| system_time | double precision  | System CPU time used                                |
++-------------+-------------------+-----------------------------------------------------+
+
+pg_stat_ucache_detail view
+--------------------------
+
++-------------+-------------------+-----------------------------------------------------+
+| Name        | Type              | Description                                         |
++=============+===================+=====================================================+
+| uid         | bigint            | UID number                                          |
++-------------+-------------------+-----------------------------------------------------+
+| reads       | bigint            | Number of bytes read by the filesystem layer        |
++-------------+-------------------+-----------------------------------------------------+
+| reads_blks  | bigint            | Number of 8K blocks read by the filesystem layer    |
++-------------+-------------------+-----------------------------------------------------+
+| writes      | bigint            | Number of bytes written by the filesystem layer     |
++-------------+-------------------+-----------------------------------------------------+
+| writes_blks | bigint            | Number of 8K blocks written by the filesystem layer |
++-------------+-------------------+-----------------------------------------------------+
+| user_time   | double precision  | User CPU time used                                  |
++-------------+-------------------+-----------------------------------------------------+
+| system_time | double precision  | System CPU time used                                |
++-------------+-------------------+-----------------------------------------------------+
+
+pg_stat_ucache_reset function
+-----------------------------
+
+Resets the statistics gathered by pg_stat_ucache. Can be called by superusers::
+
+ pg_stat_ucache_reset()
+
+
+pg_stat_ucache function
+-----------------------
+
+This function is a set-returning functions that dumps the containt of the counters
+of the shared memory structure. This function is used by the pg_stat_ucache view.
+The function can be called by any user::
+
+ SELECT * FROM pg_stat_ucache();
+
+It provides the following columns:
+
++-------------+-------------------+--------------------------------------------------+
+| Name        | Type              | Description                                      |
++=============+===================+==================================================+
++-------------+-------------------+--------------------------------------------------+
+| uid         | bigint            | UID number                                       |
++-------------+-------------------+--------------------------------------------------+
+| reads       | bigint            | Number of bytes read by the filesystem layer     |
++-------------+-------------------+--------------------------------------------------+
+| writes      | bigint            | Number of bytes written by the filesystem layer  |
++-------------+-------------------+--------------------------------------------------+
+| user_time   | double precision  | User CPU time used                               |
++-------------+-------------------+--------------------------------------------------+
+| system_time | double precision  | System CPU time use                              |
 +-------------+-------------------+--------------------------------------------------+
 
 Bugs and limitations

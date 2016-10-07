@@ -33,7 +33,7 @@
 #define PGSU_DUMP_FILE "global/pg_stat_ucache.stat"
 #endif
 
-#define PG_STAT_UCACHE_COLS 8
+#define PG_STAT_UCACHE_COLS 5
 /* Size of a block for getrusage() */
 #define RUSAGE_BLOCK_SIZE 512
 
@@ -41,10 +41,7 @@ static const uint32 PGSU_FILE_HEADER = 0x0dea6e0f;
 
 typedef struct
 {
-	int64  uid;
-	Oid    userid;
-	Oid    dbid;
-	uint32 queryid;
+	int64 uid;
 } pgsuHashKey;
 
 typedef struct
@@ -77,10 +74,7 @@ pgsu_hash_fn(const void *key, Size keysize)
 {
 	const pgsuHashKey *k = (const pgsuHashKey *) key;
 
-	return hash_uint32(k->uid) ^
-	    hash_uint32((uint32) k->userid) ^
-	    hash_uint32((uint32) k->dbid) ^
-	    hash_uint32((uint32) k->queryid);
+	return hash_uint32(k->uid);
 }
 
 static int
@@ -89,10 +83,7 @@ pgsu_match_fn(const void *key1, const void *key2, Size keysize)
 	const pgsuHashKey *k1 = (const pgsuHashKey *) key1;
 	const pgsuHashKey *k2 = (const pgsuHashKey *) key2;
 
-	if (k1->uid == k2->uid &&
-	    k1->userid == k2->userid &&
-		k1->dbid == k2->dbid &&
-		k1->queryid == k2->queryid)
+	if (k1->uid == k2->uid)
 		return 0;
 	else
 		return 1;
@@ -177,12 +168,12 @@ static pgsuEntry *pgsu_entry_alloc(pgsuHashKey *key, bool sticky)
 		SpinLockInit(&entry->lock);
 	}
 
-	entry->calls = 0;
-	entry->reads = 0;
+	entry->calls  = 0;
+	entry->reads  = 0;
 	entry->writes = 0;
-	entry->utime = (0.0);
-	entry->stime = (0.0);
-	entry->usage = (0.0);
+	entry->utime  = (0.0);
+	entry->stime  = (0.0);
+	entry->usage  = (0.0);
 	return entry;
 }
 
@@ -485,10 +476,7 @@ void pgsu_store(QueryDesc *query, int64 reads, int64 writes,
 		return;
 
 	/* Set up key for hashtable search */
-	key.uid     = uid;
-	key.userid  = GetUserId();
-	key.dbid    = MyDatabaseId;
-	key.queryid = query->plannedstmt->queryId;
+	key.uid = uid;
 
 	/* Lookup the hash table entry with shared lock. */
 	LWLockAcquire(pgsu->lock, LW_SHARED);
@@ -607,10 +595,7 @@ pg_stat_ucache(PG_FUNCTION_ARGS)
 		}
 		reads = entry->reads * RUSAGE_BLOCK_SIZE;
 		writes = entry->writes * RUSAGE_BLOCK_SIZE;
-		values[i++] = Int64GetDatum(entry->key.queryid);
-		values[i++] = ObjectIdGetDatum(entry->key.userid);
-		values[i++] = ObjectIdGetDatum(entry->key.dbid);
-		values[i++] = Int32GetDatum(entry->key.uid);
+		values[i++] = Int64GetDatum(entry->key.uid);
 		values[i++] = Int64GetDatumFast(reads);
 		values[i++] = Int64GetDatumFast(writes);
 		values[i++] = Float8GetDatumFast(entry->utime);
