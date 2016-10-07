@@ -7,7 +7,7 @@ REGRESS_OPTS = --inputdir=test
 PG_CONFIG ?= pg_config
 
 MODULE_big = pg_stat_kcache
-OBJS = pg_stat_kcache.o
+OBJS = pg_stat_kcache.o pg_stat_ucache.o
 
 all:
 

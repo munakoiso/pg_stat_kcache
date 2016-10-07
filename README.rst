@@ -1,4 +1,4 @@
-pg_stat_kcache
+pg_stat_kcache (with pg_stat_ucache extension)
 ==============
 
 Features
@@ -9,6 +9,23 @@ It is provided in the form of an extension for PostgreSQL >= 9.4., and requires
 pg_stat_statements extension to be installed. PostgreSQL 9.4 or more is
 required as previous version of provided pg_stat_statements didn't expose the
 queryid field.
+
+pg_stat_ucache
+---------------
+
+Gather statistics about physical disk access and CPU consumption
+done by backends per UID.
+
+UID number is collected by parsing a query comment in form
+of ``</><*> <uid:><number> <*></>``. Comment may include additional
+information, which will be ignored by parser. If no UID is
+specified, then statement will be skipped.
+
+``pg_stat_ucache.max`` configuration variable defines a maximum
+number of records to track.
+
+The extension exports ``pg_stat_ucache()``, ``pg_stat_ucache_reset()`` functions and
+``pg_stat_ucache``, ``pg_stat_ucache_detail`` views.
 
 Installation
 ============
@@ -48,7 +65,8 @@ every database where you need to access the statistics::
 Usage
 =====
 
-pg_stat_kcache create several objects.
+pg_stat_kcache create several objects. pg_stat_ucache objects has the same
+semantics with the addition of ``uid bigint`` column.
 
 pg_stat_kcache view
 -------------------

@@ -37,6 +37,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 
+#include "pg_stat_ucache.h"
 
 PG_MODULE_MAGIC;
 
@@ -215,6 +216,12 @@ _PG_init(void)
 
 	/* set pgsk_max if needed */
 	pgsk_setmax();
+<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
+=======
+
+	pgsu_init();
+
+>>>>>>> Implement pg_stat_ucache extension.
 	RequestAddinShmemSpace(pgsk_memsize());
 #if PG_VERSION_NUM >= 90500
 	RequestNamedLWLockTranche("pg_stat_kcache", 1);
@@ -279,6 +286,9 @@ pgsk_shmem_startup(void)
 
 	if (prev_shmem_startup_hook)
 		prev_shmem_startup_hook();
+
+	/* init ucache first */
+	pgsu_shmem_startup();
 
 	/* reset in case this is a restart within the postmaster */
 	pgsk = NULL;
@@ -398,6 +408,8 @@ pgsk_shmem_shutdown(int code, Datum arg)
 	/* Don't try to dump during a crash. */
 	if (code)
 		return;
+
+	pgsu_shmem_shutdown();
 
 	if (!pgsk)
 		return;
@@ -592,6 +604,15 @@ static pgskEntry *pgsk_entry_alloc(pgskHashKey *key)
 		SpinLockInit(&entry->mutex);
 	}
 
+<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
+=======
+	entry->calls = 0;
+	entry->reads = 0;
+	entry->writes = 0;
+	entry->utime = (0.0);
+	entry->stime = (0.0);
+	entry->usage = (0.0);
+>>>>>>> Implement pg_stat_ucache extension.
 	return entry;
 }
 
@@ -733,7 +754,20 @@ pgsk_ExecutorEnd (QueryDesc *queryDesc)
 #endif
 
 	/* store current number of block reads and writes */
+<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
 	pgsk_entry_store(queryId, counters);
+=======
+	pgsu_store(queryDesc, own_rusage.ru_inblock - counters.current_reads,
+			own_rusage.ru_oublock - counters.current_writes,
+			utime,
+			stime);
+
+	entry_store(queryId, own_rusage.ru_inblock - counters.current_reads,
+			own_rusage.ru_oublock - counters.current_writes,
+			utime,
+			stime
+	);
+>>>>>>> Implement pg_stat_ucache extension.
 
 	/* give control back to PostgreSQL */
 	if (prev_ExecutorEnd)
