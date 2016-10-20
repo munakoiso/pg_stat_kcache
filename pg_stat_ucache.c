@@ -33,7 +33,7 @@
 #define PGSU_DUMP_FILE "global/pg_stat_ucache.stat"
 #endif
 
-#define PG_STAT_UCACHE_COLS 5
+#define PG_STAT_UCACHE_COLS 6
 /* Size of a block for getrusage() */
 #define RUSAGE_BLOCK_SIZE 512
 
@@ -596,6 +596,7 @@ pg_stat_ucache(PG_FUNCTION_ARGS)
 		reads = entry->reads * RUSAGE_BLOCK_SIZE;
 		writes = entry->writes * RUSAGE_BLOCK_SIZE;
 		values[i++] = Int64GetDatum(entry->key.uid);
+		values[i++] = Int64GetDatum(entry->calls);
 		values[i++] = Int64GetDatumFast(reads);
 		values[i++] = Int64GetDatumFast(writes);
 		values[i++] = Float8GetDatumFast(entry->utime);

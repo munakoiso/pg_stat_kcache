@@ -51,7 +51,7 @@ GRANT SELECT ON pg_stat_kcache TO public;
 GRANT ALL ON FUNCTION pg_stat_kcache() TO public;
 REVOKE ALL ON FUNCTION pg_stat_kcache_reset() FROM public;
 
-CREATE FUNCTION pg_stat_ucache(OUT uid bigint,
+CREATE FUNCTION pg_stat_ucache(OUT uid bigint, OUT calls bigint,
     OUT reads bigint, OUT writes bigint, OUT user_time double precision,
     OUT system_time double precision)
     RETURNS SETOF record
@@ -65,6 +65,7 @@ CREATE FUNCTION pg_stat_ucache_reset()
 
 CREATE VIEW pg_stat_ucache AS
 SELECT k.uid,
+       k.calls AS calls,
        k.reads AS reads,
        k.reads/(current_setting('block_size')::integer) AS reads_blks,
        k.writes AS writes,
