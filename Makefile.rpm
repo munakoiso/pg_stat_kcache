@@ -1,0 +1,7 @@
+.PHONY: all
+
+all:
+	rpmbuild \
+		--define "_defined_release `git rev-parse --short HEAD`" \
+		--define "_defined_build_number `git rev-list HEAD --count`" \
+		-bb pg_stat_kcache.spec 
