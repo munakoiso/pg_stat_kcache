@@ -24,5 +24,6 @@ override_dh_installchangelogs:
 
 orig: debian/control clean
 	cd .. && tar czf pg-stat-kcache_$(PKGVER).orig.tar.gz $(EXCLUDE) pg-stat-kcache-$(PKGVER)
+
 %:
 	dh $@

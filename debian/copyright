@@ -1,3 +1,8 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: pg_stat_kcache
+Source: <https://github.yandex-team.ru/mdb/pg_stat_kcache>
+
+Files: *
 Portions Copyright (c) 2014-2017, Dalibo
 Portions Copyright (c) 2018, The PoWA-team
 
@@ -27,3 +32,4 @@ Contributors to pg_stat_kcache:
   * Alain Delorme
   * Jean-Sébastien Bacq
   * edechaux
+  * Evgeny Dyukov <secwall@yandex-team.ru>
