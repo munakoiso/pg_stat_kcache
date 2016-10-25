@@ -12,6 +12,7 @@ Version:        2.0.3
 Release:        %{_defined_release}
 License:        Yandex License 
 Group:          Applications/Databases
+Patch0:         %{sname}-makefile-pgxs.patch
 URL:            https://github.yandex-team.ru/mdb/pg_stat_kcache 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
@@ -21,6 +22,9 @@ It is provided in the form of an extension for PostgreSQL >= 9.4., and
 requires pg_stat_statements extension to be installed. PostgreSQL 9.4 or more
 is required as previous version of provided pg_stat_statements didn't expose
 the queryid field.
+
+%prep
+%patch0 -p0
 
 %build
 make %{?_smp_mflags}
