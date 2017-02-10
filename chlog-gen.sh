@@ -1,7 +1,9 @@
 cat > debian/changelog<<EOH
-postgresql-9.5-kcache (2.0.3-$(git rev-parse --short HEAD)) trusty; urgency=low
+postgresql-${MAJOR}-kcache (2.0.3-$(git rev-parse --short HEAD)) trusty; urgency=low
 
-  * Yandex qutobuild
+  * Yandex autobuild
 
  -- ${USER} <${USER}@$(hostname)>  $(date +%a\,\ %d\ %b\ %Y\ %H:%M:%S\ %z)
 EOH
+
+sed -i s/REPLACE_ME/$MAJOR/g debian/control

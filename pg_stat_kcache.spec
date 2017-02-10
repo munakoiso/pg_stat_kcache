@@ -1,5 +1,3 @@
-%global pgmajorversion 95
-%global pginstdir /usr/pgsql-9.5
 %global sname pg_stat_kcache
 %define _builddir   .
 %define _sourcedir  .
@@ -12,7 +10,6 @@ Version:        2.0.3
 Release:        %{_defined_release}
 License:        Yandex License 
 Group:          Applications/Databases
-Patch0:         %{sname}-makefile-pgxs.patch
 URL:            https://github.yandex-team.ru/mdb/pg_stat_kcache 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
@@ -24,7 +21,7 @@ is required as previous version of provided pg_stat_statements didn't expose
 the queryid field.
 
 %prep
-%patch0 -p0
+sed -i 's/pg_config/\/usr\/pgsql-%pgmajor\/bin\/pg_config/g' Makefile
 
 %build
 make %{?_smp_mflags}
@@ -44,9 +41,9 @@ make %{?_smp_mflags} install DESTDIR=%{buildroot}
 %files
 %defattr(644,root,root,755)
 %doc /usr/share/doc/pgsql/extension/README-%{sname}.rst 
-%{pginstdir}/lib/%{sname}.so
-%{pginstdir}/share/extension/%{sname}--%{version}.sql
-%{pginstdir}/share/extension/%{sname}--2.0.2.sql
-%{pginstdir}/share/extension/%{sname}--2.0.1--2.0.2.sql
-%{pginstdir}/share/extension/%{sname}--2.0.2--2.0.3.sql
-%{pginstdir}/share/extension/%{sname}.control
+/usr/pgsql-%pgmajor/lib/%{sname}.so
+/usr/pgsql-%pgmajor/share/extension/%{sname}--%{version}.sql
+/usr/pgsql-%pgmajor/share/extension/%{sname}--2.0.2.sql
+/usr/pgsql-%pgmajor/share/extension/%{sname}--2.0.1--2.0.2.sql
+/usr/pgsql-%pgmajor/share/extension/%{sname}--2.0.2--2.0.3.sql
+/usr/pgsql-%pgmajor/share/extension/%{sname}.control
