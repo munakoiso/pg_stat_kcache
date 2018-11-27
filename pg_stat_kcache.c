@@ -216,12 +216,8 @@ _PG_init(void)
 
 	/* set pgsk_max if needed */
 	pgsk_setmax();
-<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
-=======
-
 	pgsu_init();
 
->>>>>>> Implement pg_stat_ucache extension.
 	RequestAddinShmemSpace(pgsk_memsize());
 #if PG_VERSION_NUM >= 90500
 	RequestNamedLWLockTranche("pg_stat_kcache", 1);
@@ -604,15 +600,12 @@ static pgskEntry *pgsk_entry_alloc(pgskHashKey *key)
 		SpinLockInit(&entry->mutex);
 	}
 
-<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
-=======
-	entry->calls = 0;
-	entry->reads = 0;
-	entry->writes = 0;
-	entry->utime = (0.0);
-	entry->stime = (0.0);
-	entry->usage = (0.0);
->>>>>>> Implement pg_stat_ucache extension.
+	entry->counters.reads = 0;
+	entry->counters.writes = 0;
+	entry->counters.utime = (0.0);
+	entry->counters.stime = (0.0);
+	entry->counters.usage = (0.0);
+
 	return entry;
 }
 
@@ -753,21 +746,12 @@ pgsk_ExecutorEnd (QueryDesc *queryDesc)
 	counters.nivcsws = rusage_end.ru_nivcsw - rusage_start.ru_nivcsw;
 #endif
 
-	/* store current number of block reads and writes */
-<<<<<<< cfac633cc579ccf57e487aa718436428130f7812
-	pgsk_entry_store(queryId, counters);
-=======
-	pgsu_store(queryDesc, own_rusage.ru_inblock - counters.current_reads,
-			own_rusage.ru_oublock - counters.current_writes,
-			utime,
-			stime);
+	pgsu_store(queryDesc, rusage_end.ru_inblock - rusage_start.ru_inblock,
+			   rusage_end.ru_oublock - rusage_start.ru_oublock,
+			   counters.utime,
+			   counters.stime);
 
-	entry_store(queryId, own_rusage.ru_inblock - counters.current_reads,
-			own_rusage.ru_oublock - counters.current_writes,
-			utime,
-			stime
-	);
->>>>>>> Implement pg_stat_ucache extension.
+	pgsk_entry_store(queryId, counters);
 
 	/* give control back to PostgreSQL */
 	if (prev_ExecutorEnd)
