@@ -3,8 +3,6 @@
 PKGVER = $(shell dpkg-parsechangelog | awk -F '[:-]' '/^Version:/ { print substr($$2, 2) }')
 EXCLUDE = --exclude-vcs --exclude=debian
 
-include /usr/share/postgresql-common/pgxs_debian_control.mk
-
 override_dh_auto_build:
 	# do nothing
 
@@ -13,7 +11,7 @@ override_dh_auto_test:
 
 override_dh_auto_install:
 	# build all supported versions
-	+pg_buildext loop postgresql-%v-kcache
+	+export PG_SUPPORTED_VERSIONS=installed && pg_buildext loop postgresql-%v-kcache
 
 override_dh_installdocs:
 
