@@ -22,9 +22,9 @@ CREATE FUNCTION pgsk_get_stats(
 AS 'MODULE_PATHNAME', 'pgsk_get_stats'
     LANGUAGE C STRICT;
 
-CREATE FUNCTION pgsk_get_stats_t(
-    timestamptz,
-    timestamptz,
+CREATE FUNCTION pgsk_get_stats_time_interval(
+    start_ts            timestamptz,
+    stop_ts             timestamptz,
     OUT comment_keys    jsonb,
     OUT query_count     integer,
     OUT userid          oid,
@@ -45,7 +45,7 @@ CREATE FUNCTION pgsk_get_stats_t(
     OUT out_network     bigint
 )
     RETURNS SETOF record
-AS 'MODULE_PATHNAME', 'pgsk_get_stats_t'
+AS 'MODULE_PATHNAME', 'pgsk_get_stats_time_interval'
     LANGUAGE C STRICT;
 
 CREATE FUNCTION pgsk_reset_stats()

@@ -203,9 +203,13 @@ _PG_init(void) {
         return;
     }
 
-    register_bgworker();
+    (void)bucket_size;
+    (void)bucket_duration;
+    (void)max_strings_count;
+
+    pgsk_register_bgworker();
     define_custom_variables();
-    calculate_max_strings_count();
+    pgsk_calculate_max_strings_count();
 
 	EmitWarningsOnPlaceholders("pg_stat_kcache");
 
@@ -316,7 +320,7 @@ pgsk_shmem_startup(void)
 							  &info,
 							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE);
 
-    define_custom_shmem_vars(info);
+    pgsk_define_custom_shmem_vars(info);
 	LWLockRelease(AddinShmemInitLock);
 
 	if (!IsUnderPostmaster)
