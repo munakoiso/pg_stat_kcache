@@ -7,6 +7,7 @@
 #include "storage/proc.h"
 #include "storage/shmem.h"
 #include "utils/datetime.h"
+#include "utils/timestamp.h"
 
 #include "pg_stat_kcache_constants.h"
 
@@ -88,6 +89,8 @@ typedef struct global_info {
     int keys_count;
     int currents_strings_count;
     LWLock lock;
+    TimestampTz init_timestamp;
+    TimestampTz last_update_timestamp;
     pgskBucketItem buckets[FLEXIBLE_ARRAY_MEMBER];
 } GlobalInfo;
 
@@ -100,6 +103,8 @@ static void get_pgskKeysArray_by_query(char*, pgskKeysArray*, bool*);
 static int get_index_of_comment_key(char*);
 
 static int get_id_from_string(char*);
+
+static Datum _pgsk_get_stats_t(TimestampTz, TimestampTz, FunctionCallInfo);
 
 static int
 get_random_int(void)
@@ -170,10 +175,10 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
     while (query_prefix != NULL) {
         len = strlen(query_prefix);
         if (strcmp(query_prefix + len - 1, end_of_key) == 0 && key_index == -1) {
-            // it's key
+            /* it's key */
             key_index = get_index_of_comment_key(query_prefix);
         } else {
-            // it's value
+            /* it's value */
 
             value_id = get_id_from_string(query_prefix);
             if (value_id == -1) {
@@ -352,7 +357,7 @@ get_id_from_string(char *string_pointer) {
     idFromString = hash_search(string_to_id, (void *) &string, HASH_FIND, &found);
     if (!found) {
         found = true;
-        // Generate id that not used yet.
+        /* Generate id that not used yet. */
         while (found) {
             id = get_random_int();
             stringFromId = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
@@ -401,7 +406,7 @@ pop_key(int bucket, int key_in_bucket) {
     bool found;
     int i;
     int id;
-    // pgskIdFromString* id_pointer;
+    /* pgskIdFromString* id_pointer; */
     char str_key[max_parameter_length];
     pgskStringFromId *string_struct;
     pgskCountersHtabValue *elem;
@@ -445,7 +450,7 @@ pgsk_init(bool explicit_reset) {
     int bucket;
     int key_in_bucket;
 
-    // Wait for all locks (in case of manual reset some locks can be acquired)
+    /* Wait for all locks (in case of manual reset some locks can be acquired) */
     if (!explicit_reset) {
         LWLockInitialize(&global_variables->lock, LWLockNewTrancheId());
     }
@@ -472,6 +477,7 @@ pgsk_init(bool explicit_reset) {
 
         LWLockRelease(&global_variables->lock);
     }
+    global_variables->init_timestamp = GetCurrentTimestamp();
 }
 
 static void
@@ -491,6 +497,7 @@ pgsk_update_info() {
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
     global_variables->bucket_fullness[next_bucket] = 0;
     global_variables->bucket = next_bucket;
+    global_variables->last_update_timestamp = GetCurrentTimestamp();
     LWLockRelease(&global_variables->lock);
 }
 
@@ -573,7 +580,9 @@ static char *escape_json_string(const char *str) {
     return pstr;
 }
 
+
 PG_FUNCTION_INFO_V1(pgsk_get_stats);
+PG_FUNCTION_INFO_V1(pgsk_get_stats_t);
 
 Datum
 get_jsonb_datum_from_key(pgskKeysArray *keys) {
@@ -609,6 +618,49 @@ get_jsonb_datum_from_key(pgskKeysArray *keys) {
 
 Datum
 pgsk_get_stats(PG_FUNCTION_ARGS) {
+
+    TimestampTz timestamp_left;
+    TimestampTz timestamp_right;
+
+    timestamp_right = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), bucket_duration * 1000);
+    timestamp_left = global_variables->init_timestamp;
+
+    return _pgsk_get_stats_t(timestamp_left, timestamp_right, fcinfo);
+}
+
+Datum
+pgsk_get_stats_t(PG_FUNCTION_ARGS) {
+    TimestampTz timestamp_left;
+    TimestampTz timestamp_right;
+
+    timestamp_left = PG_GETARG_TIMESTAMP(0);
+    timestamp_right = PG_GETARG_TIMESTAMP(1);
+
+    return _pgsk_get_stats_t(timestamp_left, timestamp_right, fcinfo);
+}
+
+static TimestampTz
+_pgsk_normalize_ts(TimestampTz ts) {
+    long sec_diff;
+    int msec_diff;
+    TimestampTz now;
+    now = GetCurrentTimestamp();
+    if (global_variables->init_timestamp > ts)
+        ts = global_variables->init_timestamp;
+    TimestampDifference(ts, global_variables->last_update_timestamp, &sec_diff, &msec_diff);
+    /* if ts < oldest stat we have */
+    if (sec_diff > buckets_count * bucket_duration) {
+        ts = TimestampTzPlusMilliseconds(global_variables->last_update_timestamp, - (int64) buckets_count * bucket_duration * 1e3);
+    }
+    if (ts > now) {
+        ts = now;
+    }
+
+    return ts;
+}
+
+static Datum
+_pgsk_get_stats_t(TimestampTz timestamp_left, TimestampTz timestamp_right, FunctionCallInfo fcinfo) {
     ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
     Tuplestorestate *tupstore;
     TupleDesc tupdesc;
@@ -627,6 +679,16 @@ pgsk_get_stats(PG_FUNCTION_ARGS) {
     char key_name[max_parameter_length];
     uint64 reads, writes;
     int index;
+    TimestampTz norm_left_ts;
+    TimestampTz norm_right_ts;
+    int bucket_left;
+    int bucket_right;
+    int bucket_interval;
+    int64 bucket_time_since_init;
+    char timestamp_left_s[max_parameter_length];
+    char timestamp_right_s[max_parameter_length];
+    long sec_diff;
+    int msec_diff;
 
     Datum values[PG_STAT_KCACHE_COLS + 3];
     bool nulls[PG_STAT_KCACHE_COLS + 3];
@@ -665,18 +727,43 @@ pgsk_get_stats(PG_FUNCTION_ARGS) {
     MemSet(&key, 0, sizeof(pgskCountersHtabKey));
     MemSet(key_name, 0, sizeof(key_name));
 
-    // aggregate in bucket_ind = -1 all stats
+    /* aggregate in bucket_ind = -1 all stats */
     LWLockAcquire(&global_variables->lock, LW_SHARED);
-    bucket_index_0 = (global_variables->bucket - buckets_count + 1 + actual_buckets_count) % actual_buckets_count;
+
+    strcpy(timestamp_left_s, timestamptz_to_str(timestamp_left));
+    strcpy(timestamp_right_s, timestamptz_to_str(timestamp_right));
+
+    norm_left_ts = _pgsk_normalize_ts(timestamp_left);
+    TimestampDifference(global_variables->init_timestamp, norm_left_ts, &sec_diff, &msec_diff);
+    bucket_time_since_init = sec_diff / bucket_duration;
+    norm_left_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * bucket_duration * 1e3);
+    bucket_left = bucket_time_since_init % actual_buckets_count;
+
+    norm_right_ts = _pgsk_normalize_ts(timestamp_right);
+    TimestampDifference(global_variables->init_timestamp, norm_right_ts, &sec_diff, &msec_diff);
+    bucket_time_since_init = sec_diff / bucket_duration + 1;
+    norm_right_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * bucket_duration * 1e3);
+
+    if (norm_right_ts > GetCurrentTimestamp())
+        norm_right_ts = GetCurrentTimestamp();
+
+    bucket_right = bucket_time_since_init % actual_buckets_count;
+
+    strcpy(timestamp_left_s, timestamptz_to_str(norm_left_ts));
+    strcpy(timestamp_right_s, timestamptz_to_str(norm_right_ts));
+    elog(NOTICE, "pgsk: Show stats from '%s' to '%s'", timestamp_left_s, timestamp_right_s);
+
+    bucket_interval = bucket_right - bucket_left + 1;
+    bucket_index_0 = bucket_left;
     bucket_fullness = global_variables->bucket_fullness[global_variables->bucket];
     LWLockRelease(&global_variables->lock);
 
-    for (delta_bucket = 0; delta_bucket < buckets_count; ++delta_bucket) {
+    for (delta_bucket = 0; delta_bucket < bucket_interval; ++delta_bucket) {
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
         for (key_index = 0; key_index < bucket_size; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-            if ((delta_bucket == buckets_count - 1 && key_index == bucket_fullness) ||
-                (delta_bucket < buckets_count - 1 && key_index == global_variables->bucket_fullness[bucket_index])) {
+            if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
+                (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -718,13 +805,13 @@ pgsk_get_stats(PG_FUNCTION_ARGS) {
         }
     }
 
-    // put to tuplestore and clear bucket index -1
-    for (delta_bucket = 0; delta_bucket < buckets_count; ++delta_bucket) {
+    /* put to tuplestore and clear bucket index -1 */
+    for (delta_bucket = 0; delta_bucket < bucket_interval; ++delta_bucket) {
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
         for (key_index = 0; key_index < bucket_size; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-            if ((delta_bucket == buckets_count - 1 && key_index == bucket_fullness) ||
-                (delta_bucket < buckets_count - 1 && key_index == global_variables->bucket_fullness[bucket_index])) {
+            if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
+                (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -738,7 +825,7 @@ pgsk_get_stats(PG_FUNCTION_ARGS) {
                 MemSet(nulls, false, sizeof(nulls));
 
                 values[i++] = get_jsonb_datum_from_key(&key.info.keys);
-                // put to tuplestore, then remove hash
+                /* put to tuplestore, then remove hash */
                 values[i++] = Int64GetDatum(elem->counters.usage);
                 values[i++] = ObjectIdGetDatum(elem->key.info.user);
                 values[i++] = ObjectIdGetDatum(elem->key.info.database);
