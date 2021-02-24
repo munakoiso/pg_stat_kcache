@@ -45,4 +45,5 @@ make %{?_smp_mflags} install DESTDIR=%{buildroot}
 /usr/pgsql-%pgmajor/share/extension/%{sname}--2.1.1.sql
 /usr/pgsql-%pgmajor/share/extension/%{sname}--2.0.3--2.1.1.sql
 /usr/pgsql-%pgmajor/share/extension/%{sname}--2.1.0--2.1.1.sql
+/usr/pgsql-%pgmajor/share/extension/%{sname}--2.1.1--2.1.2.sql
 /usr/pgsql-%pgmajor/share/extension/%{sname}.control

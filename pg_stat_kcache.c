@@ -37,6 +37,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 
+#include "pgsk_aggregated_stats.h"
 #include "pg_stat_ucache.h"
 
 PG_MODULE_MAGIC;
@@ -55,19 +56,9 @@ typedef uint64 pgsk_queryid;
 typedef uint32 pgsk_queryid;
 #endif
 
-#define PG_STAT_KCACHE_COLS_V2_0	7
-#define PG_STAT_KCACHE_COLS_V2_1	15
-#define PG_STAT_KCACHE_COLS			15	/* maximum of above */
-
-#define USAGE_INCREASE			(1.0)
-#define USAGE_DECREASE_FACTOR	(0.99)	/* decreased every pgsk_entry_dealloc */
-#define USAGE_DEALLOC_PERCENT	5		/* free this % of entries at once */
-#define USAGE_INIT				(1.0)	/* including initial planning */
-
 /* ru_inblock block size is 512 bytes with Linux
  * see http://lkml.indiana.edu/hypermail/linux/kernel/0703.2/0937.html
  */
-#define RUSAGE_BLOCK_SIZE	512			/* Size of a block for getrusage() */
 
 #define TIMEVAL_DIFF(start, end) ((double) end.tv_sec + (double) end.tv_usec / 1000000.0) \
 	- ((double) start.tv_sec + (double) start.tv_usec / 1000000.0)
@@ -84,33 +75,6 @@ typedef enum pgskVersion
 static const uint32 PGSK_FILE_HEADER = 0x0d756e10;
 
 static struct	rusage rusage_start;
-
-/*
- * Current getrusage counters.
- *
- * For platform without getrusage support, we rely on postgres implementation
- * defined in rusagestub.h, which only supports user and system time.
-*/
-typedef struct pgskCounters
-{
-	double			usage;		/* usage factor */
-	/* These fields are always used */
-	float8			utime;		/* CPU user time */
-	float8			stime;		/* CPU system time */
-#ifdef HAVE_GETRUSAGE
-	/* These fields are only used for platform with HAVE_GETRUSAGE defined */
-	int64			minflts;	/* page reclaims (soft page faults) */
-	int64			majflts;	/* page faults (hard page faults) */
-	int64			nswaps;		/* page faults (hard page faults) */
-	int64			reads;		/* Physical block reads */
-	int64			writes;		/* Physical block writes */
-	int64			msgsnds;	/* IPC messages sent */
-	int64			msgrcvs;	/* IPC messages received */
-	int64			nsignals;	/* signals received */
-	int64			nvcsws;		/* voluntary context witches */
-	int64			nivcsws;	/* unvoluntary context witches */
-#endif
-} pgskCounters;
 
 static int	pgsk_max = 0;	/* max #queries to store. pg_stat_statements.max is used */
 
@@ -188,29 +152,64 @@ static bool pgsk_assign_linux_hz_check_hook(int *newval, void **extra, GucSource
 
 static int	pgsk_linux_hz;
 
-void
-_PG_init(void)
-{
-	if (!process_shared_preload_libraries_in_progress)
-	{
-		elog(ERROR, "This module can only be loaded via shared_preload_libraries");
-		return;
-	}
+static void
+define_custom_variables(void) {
+    DefineCustomIntVariable("pg_stat_kcache.linux_hz",
+                            "Inform pg_stat_kcache of the linux CONFIG_HZ config option",
+                            "This is used by pg_stat_kcache to compensate for sampling errors "
+                            "in getrusage due to the kernel adhering to its ticks. The default value, -1, "
+                            "tries to guess it at startup. ",
+                            &pgsk_linux_hz,
+                            -1,
+                            -1,
+                            INT_MAX,
+                            PGC_USERSET,
+                            0,
+                            pgsk_assign_linux_hz_check_hook,
+                            NULL,
+                            NULL);
 
-	DefineCustomIntVariable("pg_stat_kcache.linux_hz",
-				"Inform pg_stat_kcache of the linux CONFIG_HZ config option",
-				"This is used by pg_stat_kcache to compensate for sampling errors "
-				"in getrusage due to the kernel adhering to its ticks. The default value, -1, "
-				"tries to guess it at startup. ",
-							&pgsk_linux_hz,
-							-1,
-							-1,
-							INT_MAX,
-							PGC_USERSET,
-							0,
-							pgsk_assign_linux_hz_check_hook,
-							NULL,
-							NULL);
+    DefineCustomIntVariable("pg_stat_kcache.buffer_size",
+                            "Max amount of shared memory (in megabytes), that can be allocated",
+                            "Default of 20, max of 5000",
+                            &buffer_size_mb,
+                            20,
+                            min_buffer_size_mb,
+                            max_buffer_size_mb,
+                            PGC_SUSET,
+                            GUC_UNIT_MS | GUC_NO_RESET_ALL,
+                            NULL,
+                            NULL,
+                            NULL);
+
+    DefineCustomIntVariable("pg_stat_kcache.stat_time_interval",
+                            "Duration of stat collecting interval",
+                            "Default of 6000s, max of 360000s",
+                            &stat_time_interval,
+                            6000,
+                            min_time_interval,
+                            max_time_interval,
+                            PGC_SUSET,
+                            GUC_UNIT_MS | GUC_NO_RESET_ALL,
+                            NULL,
+                            NULL,
+                            NULL);
+}
+
+void
+_PG_init(void) {
+    if (!process_shared_preload_libraries_in_progress) {
+        elog(ERROR, "This module can only be loaded via shared_preload_libraries");
+        return;
+    }
+
+    (void)bucket_size;
+    (void)bucket_duration;
+    (void)max_strings_count;
+
+    pgsk_register_bgworker();
+    define_custom_variables();
+    pgsk_calculate_max_strings_count();
 
 	EmitWarningsOnPlaceholders("pg_stat_kcache");
 
@@ -218,7 +217,7 @@ _PG_init(void)
 	pgsk_setmax();
 	pgsu_init();
 
-	RequestAddinShmemSpace(pgsk_memsize());
+	RequestAddinShmemSpace(pgsk_memsize() + buffer_size);
 #if PG_VERSION_NUM >= 90500
 	RequestNamedLWLockTranche("pg_stat_kcache", 1);
 #else
@@ -267,7 +266,6 @@ pgsk_assign_linux_hz_check_hook(int *newval, void **extra, GucSource source)
 	}
 	return true;
 }
-
 
 static void
 pgsk_shmem_startup(void)
@@ -322,6 +320,7 @@ pgsk_shmem_startup(void)
 							  &info,
 							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE);
 
+    pgsk_define_custom_shmem_vars(info);
 	LWLockRelease(AddinShmemInitLock);
 
 	if (!IsUnderPostmaster)
@@ -752,6 +751,7 @@ pgsk_ExecutorEnd (QueryDesc *queryDesc)
 			   counters.stime);
 
 	pgsk_entry_store(queryId, counters);
+    pgsk_store_aggregated_counters(&counters, queryDesc);
 
 	/* give control back to PostgreSQL */
 	if (prev_ExecutorEnd)

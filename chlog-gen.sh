@@ -1,5 +1,5 @@
 cat > debian/changelog<<EOH
-postgresql-${MAJOR}-kcache (2.1.1-$(git rev-parse --short HEAD)) trusty; urgency=low
+postgresql-${MAJOR}-kcache (2.1.2-$(git rev-parse --short HEAD)) trusty; urgency=low
 
   * Yandex autobuild
 
