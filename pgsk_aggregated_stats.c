@@ -151,12 +151,12 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
     key.bucket = global_variables->bucket;
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (!found) {
-        if (global_variables->bucket_fullness[key.bucket] == bucket_size) {
+        if (global_variables->bucket_fullness[key.bucket] == global_variables->max_strings_count) {
             elog(LOG, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
             return;
         }
         elem = hash_search(counters_htab, (void *) &key, HASH_ENTER, &found);
-        index = global_variables->bucket * bucket_size + global_variables->bucket_fullness[key.bucket];
+        index = global_variables->bucket * global_variables->max_strings_count + global_variables->bucket_fullness[key.bucket];
         memcpy(&global_variables->buckets[index], &elem->key.info, sizeof(pgskBucketItem));
         global_variables->bucket_fullness[key.bucket] += 1;
         memcpy(&elem->key, &key, sizeof(pgskCountersHtabKey));
@@ -187,16 +187,42 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
 }
 
 void
-pgsk_define_custom_shmem_vars(HASHCTL info) {
+pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_interval) {
     bool                found_global_info;
     bool                found;
     int                 id;
+    int                 bucket_size;
+    int                 max_strings_count;
     pgskStringFromId    *stringFromId;
+    int64               buffer_size;
+    int global_var_const_size;
+    int counters_htab_size;
+    int string_to_id_htab_size;
+    int id_to_string_htab_size;
+
+    global_var_const_size = sizeof(GlobalInfo);
+    counters_htab_size = (sizeof(pgskCountersHtabKey) + sizeof(pgskCountersHtabValue)) * (actual_buckets_count + 1);
+    string_to_id_htab_size = (sizeof(char) * max_parameter_length + sizeof(pgskIdFromString)) * max_parameters_count;
+    id_to_string_htab_size = (sizeof(int) + sizeof(pgskStringFromId)) * max_parameters_count;
+
+    buffer_size = _buffer_size_mb * 1e6;
+    bucket_size = (buffer_size - global_var_const_size) /
+                                    (counters_htab_size + string_to_id_htab_size + id_to_string_htab_size);
+
+
+    global_variables = ShmemInitStruct("pg_stat_kcache global_variables",
+                                       sizeof(GlobalInfo) + sizeof(pgskBucketItem) * actual_buckets_count * bucket_size,
+                                       &found_global_info);
+
+    global_variables->max_strings_count = bucket_size;
+    global_variables->bucket_duration = _stat_time_interval / buckets_count;
+    elog(LOG, "pgsk: Max count of unique strings: %d", global_variables->max_strings_count);
+
+    max_strings_count = global_variables->max_strings_count;
 
     memset(&info, 0, sizeof(info));
     info.keysize = sizeof(pgskCountersHtabKey);
     info.entrysize = sizeof(pgskCountersHtabValue);
-
 
     counters_htab = ShmemInitHash("pg_stat_kcache counters_htab",
                                   bucket_size * (actual_buckets_count + 1), bucket_size * (actual_buckets_count + 1),
@@ -220,35 +246,11 @@ pgsk_define_custom_shmem_vars(HASHCTL info) {
                                  &info,
                                  HASH_ELEM | HASH_BLOBS);
 
-    global_variables = ShmemInitStruct("pg_stat_kcache global_variables",
-                                       sizeof(GlobalInfo) + sizeof(pgskBucketItem) * actual_buckets_count * bucket_size,
-                                       &found_global_info);
-
     id = comment_key_not_specified;
     stringFromId = hash_search(id_to_string, (void *) &id, HASH_ENTER, &found);
     global_variables->currents_strings_count = 1;
     stringFromId->id = id;
     memset(stringFromId->string, '\0', sizeof(stringFromId->string));
-}
-
-void
-pgsk_calculate_max_strings_count() {
-    int counters_htab_size;
-    int string_to_id_htab_size;
-    int id_to_string_htab_size;
-    int global_var_const_size;
-
-    global_var_const_size = sizeof(GlobalInfo);
-    counters_htab_size = (sizeof(pgskCountersHtabKey) + sizeof(pgskCountersHtabValue)) * (actual_buckets_count + 1);
-    string_to_id_htab_size = (sizeof(char) * max_parameter_length + sizeof(pgskIdFromString)) * max_parameters_count;
-    id_to_string_htab_size = (sizeof(int) + sizeof(pgskStringFromId)) * max_parameters_count;
-
-    buffer_size = buffer_size_mb * 1e6;
-    bucket_size = (buffer_size - global_var_const_size) /
-                  (counters_htab_size + string_to_id_htab_size + id_to_string_htab_size);
-    max_strings_count = bucket_size;
-    bucket_duration = stat_time_interval / buckets_count;
-    elog(LOG, "pgsk: Max count of unique strings: %d", max_strings_count);
 }
 
 void
@@ -288,7 +290,7 @@ get_id_from_string(char *string_pointer) {
             stringFromId = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
         }
 
-        if (global_variables->currents_strings_count < max_strings_count) {
+        if (global_variables->currents_strings_count < global_variables->max_strings_count) {
             stringFromId = hash_search(id_to_string, (void *) &id, HASH_ENTER, &found);
             global_variables->currents_strings_count += 1;
             stringFromId->id = id;
@@ -303,7 +305,8 @@ get_id_from_string(char *string_pointer) {
         } else {
             elog(WARNING,
                  "pgsk: Can't handle request. No more memory for save strings are available. "
-                 "Decide to tune pg_stat_kcache.buffer_size");
+                 "Current max count of unique strings = %d."
+                 "Decide to tune pg_stat_kcache.buffer_size", global_variables->max_strings_count);
             LWLockRelease(&global_variables->lock);
             return -1;
         }
@@ -346,13 +349,13 @@ pop_key(int bucket, int key_in_bucket) {
         LWLockRelease(&global_variables->lock);
         return;
     }
-    index = bucket * bucket_size + key_in_bucket;
+    index = bucket * global_variables->max_strings_count + key_in_bucket;
     memcpy(&key.info, &global_variables->buckets[index], sizeof(key.info));
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (found) {
         elem->counters.usage -= 1;
         for (i = 0; i < global_variables->keys_count; ++i) {
-            index = bucket * bucket_size + key_in_bucket;
+            index = bucket * global_variables->max_strings_count + key_in_bucket;
             id = global_variables->buckets[index].keys.keyValues[i];
             string_struct = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
             string_struct->counter -= 1;
@@ -384,12 +387,12 @@ pgsk_init(bool explicit_reset) {
     global_variables->keys_count = 0;
     global_variables->bucket = 0;
     if (!explicit_reset) {
-        memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * bucket_size);
+        memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
     }
     LWLockRelease(&global_variables->lock);
     for (bucket = 0; bucket < actual_buckets_count; ++bucket) {
-        for (key_in_bucket = 0; key_in_bucket < bucket_size; ++key_in_bucket) {
+        for (key_in_bucket = 0; key_in_bucket < global_variables->max_strings_count; ++key_in_bucket) {
             pop_key(bucket, key_in_bucket);
         }
     }
@@ -397,7 +400,7 @@ pgsk_init(bool explicit_reset) {
     if (explicit_reset) {
         LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
 
-        memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * bucket_size);
+        memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
 
         LWLockRelease(&global_variables->lock);
@@ -416,7 +419,7 @@ pgsk_update_info() {
     next_bucket = (global_variables->bucket + 1) % actual_buckets_count;
     LWLockRelease(&global_variables->lock);
 
-    for (key_in_bucket = 0; key_in_bucket < bucket_size; ++key_in_bucket) {
+    for (key_in_bucket = 0; key_in_bucket < global_variables->max_strings_count; ++key_in_bucket) {
         pop_key(next_bucket, key_in_bucket);
     }
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
@@ -439,7 +442,7 @@ pg_stat_kcache_main(Datum main_arg) {
         int rc;
         /* Wait necessary amount of time */
         rc = WaitLatch(&MyProc->procLatch,
-                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, bucket_duration * 1000, PG_WAIT_EXTENSION);
+                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, global_variables->bucket_duration * 1000, PG_WAIT_EXTENSION);
 
         ResetLatch(&MyProc->procLatch);
         /* Emergency bailout if postmaster has died */
@@ -547,7 +550,7 @@ pgsk_get_stats(PG_FUNCTION_ARGS) {
     TimestampTz timestamp_left;
     TimestampTz timestamp_right;
 
-    timestamp_right = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), bucket_duration * 1000);
+    timestamp_right = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), global_variables->bucket_duration * 1000);
     timestamp_left = global_variables->init_timestamp;
 
     return pgsk_internal_get_stats_time_interval(timestamp_left, timestamp_right, fcinfo);
@@ -574,8 +577,8 @@ _pgsk_normalize_ts(TimestampTz ts) {
         ts = global_variables->init_timestamp;
     TimestampDifference(ts, global_variables->last_update_timestamp, &sec_diff, &msec_diff);
     /* if ts < oldest stat we have */
-    if (sec_diff > buckets_count * bucket_duration) {
-        ts = TimestampTzPlusMilliseconds(global_variables->last_update_timestamp, - (int64) buckets_count * bucket_duration * 1e3);
+    if (sec_diff > buckets_count * global_variables->bucket_duration) {
+        ts = TimestampTzPlusMilliseconds(global_variables->last_update_timestamp, - (int64) buckets_count * global_variables->bucket_duration * 1e3);
     }
     if (ts > now) {
         ts = now;
@@ -660,14 +663,14 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
 
     norm_left_ts = _pgsk_normalize_ts(timestamp_left);
     TimestampDifference(global_variables->init_timestamp, norm_left_ts, &sec_diff, &msec_diff);
-    bucket_time_since_init = sec_diff / bucket_duration;
-    norm_left_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * bucket_duration * 1e3);
+    bucket_time_since_init = sec_diff / global_variables->bucket_duration;
+    norm_left_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * global_variables->bucket_duration * 1e3);
     bucket_left = bucket_time_since_init % actual_buckets_count;
 
     norm_right_ts = _pgsk_normalize_ts(timestamp_right);
     TimestampDifference(global_variables->init_timestamp, norm_right_ts, &sec_diff, &msec_diff);
-    bucket_time_since_init = sec_diff / bucket_duration + 1;
-    norm_right_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * bucket_duration * 1e3);
+    bucket_time_since_init = sec_diff / global_variables->bucket_duration + 1;
+    norm_right_ts = TimestampTzPlusMilliseconds(global_variables->init_timestamp, bucket_time_since_init * global_variables->bucket_duration * 1e3);
 
     if (norm_right_ts > GetCurrentTimestamp())
         norm_right_ts = GetCurrentTimestamp();
@@ -685,7 +688,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
 
     for (delta_bucket = 0; delta_bucket < bucket_interval; ++delta_bucket) {
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
-        for (key_index = 0; key_index < bucket_size; ++key_index) {
+        for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
                 (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
@@ -693,7 +696,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
                 break;
             }
 
-            index = bucket_index * bucket_size + key_index;
+            index = bucket_index * global_variables->max_strings_count + key_index;
             memcpy(&key.info, &global_variables->buckets[index], sizeof(pgskBucketItem));
             key.bucket = bucket_index;
 
@@ -733,14 +736,14 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     /* put to tuplestore and clear bucket index -1 */
     for (delta_bucket = 0; delta_bucket < bucket_interval; ++delta_bucket) {
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
-        for (key_index = 0; key_index < bucket_size; ++key_index) {
+        for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
                 (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
-            index = bucket_index * bucket_size + key_index;
+            index = bucket_index * global_variables->max_strings_count + key_index;
             memcpy(&key.info, &global_variables->buckets[index], sizeof(pgskBucketItem));
             key.bucket = -1;
 

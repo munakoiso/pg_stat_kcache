@@ -17,10 +17,3 @@
 #define USAGE_DECREASE_FACTOR	(0.99)	/* decreased every pgsk_entry_dealloc */
 #define USAGE_DEALLOC_PERCENT	5		/* free this % of entries at once */
 #define USAGE_INIT				(1.0)	/* including initial planning */
-
-static int bucket_size = 1000;
-static int bucket_duration = 60;
-static int stat_time_interval = 6000;
-static int max_strings_count = 5000;
-static int64 buffer_size = 20000000; /* 20Mb */
-static int buffer_size_mb = 20;
