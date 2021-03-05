@@ -152,6 +152,9 @@ static bool pgsk_assign_linux_hz_check_hook(int *newval, void **extra, GucSource
 
 static int	pgsk_linux_hz;
 
+static int stat_time_interval;
+static int buffer_size_mb;
+
 static void
 define_custom_variables(void) {
     DefineCustomIntVariable("pg_stat_kcache.linux_hz",
@@ -177,7 +180,7 @@ define_custom_variables(void) {
                             min_buffer_size_mb,
                             max_buffer_size_mb,
                             PGC_SUSET,
-                            GUC_UNIT_MS | GUC_NO_RESET_ALL,
+                            GUC_UNIT_MB | GUC_NO_RESET_ALL,
                             NULL,
                             NULL,
                             NULL);
@@ -190,7 +193,7 @@ define_custom_variables(void) {
                             min_time_interval,
                             max_time_interval,
                             PGC_SUSET,
-                            GUC_UNIT_MS | GUC_NO_RESET_ALL,
+                            GUC_UNIT_S | GUC_NO_RESET_ALL,
                             NULL,
                             NULL,
                             NULL);
@@ -198,18 +201,15 @@ define_custom_variables(void) {
 
 void
 _PG_init(void) {
+    int64 buffer_size;
     if (!process_shared_preload_libraries_in_progress) {
         elog(ERROR, "This module can only be loaded via shared_preload_libraries");
         return;
     }
 
-    (void)bucket_size;
-    (void)bucket_duration;
-    (void)max_strings_count;
-
     pgsk_register_bgworker();
     define_custom_variables();
-    pgsk_calculate_max_strings_count();
+    buffer_size = buffer_size_mb * 1e6;
 
 	EmitWarningsOnPlaceholders("pg_stat_kcache");
 
@@ -320,7 +320,7 @@ pgsk_shmem_startup(void)
 							  &info,
 							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE);
 
-    pgsk_define_custom_shmem_vars(info);
+    pgsk_define_custom_shmem_vars(info, buffer_size_mb, stat_time_interval);
 	LWLockRelease(AddinShmemInitLock);
 
 	if (!IsUnderPostmaster)

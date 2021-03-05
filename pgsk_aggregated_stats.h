@@ -87,6 +87,8 @@ typedef struct global_info {
     int bucket_fullness[actual_buckets_count];
     int keys_count;
     int currents_strings_count;
+    int max_strings_count;
+    int bucket_duration;
     LWLock lock;
     TimestampTz init_timestamp;
     TimestampTz last_update_timestamp;
@@ -94,8 +96,7 @@ typedef struct global_info {
 } GlobalInfo;
 
 void pgsk_register_bgworker(void);
-void pgsk_calculate_max_strings_count(void);
-void pgsk_define_custom_shmem_vars(HASHCTL);
+void pgsk_define_custom_shmem_vars(HASHCTL, int, int);
 void pgsk_store_aggregated_counters(pgskCounters*, QueryDesc*);
 
 #endif
