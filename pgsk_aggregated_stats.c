@@ -151,8 +151,11 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
     key.bucket = global_variables->bucket;
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (!found) {
+        global_variables->required_max_strings_count += 1;
         if (global_variables->bucket_fullness[key.bucket] == global_variables->max_strings_count) {
             elog(LOG, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
+            elog(LOG, "pgsk: Required max strings count %d", global_variables->required_max_strings_count);
+            LWLockRelease(&global_variables->lock);
             return;
         }
         elem = hash_search(counters_htab, (void *) &key, HASH_ENTER, &found);
@@ -223,20 +226,19 @@ pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_
     memset(&info, 0, sizeof(info));
     info.keysize = sizeof(pgskCountersHtabKey);
     info.entrysize = sizeof(pgskCountersHtabValue);
-
     counters_htab = ShmemInitHash("pg_stat_kcache counters_htab",
                                   bucket_size * (actual_buckets_count + 1), bucket_size * (actual_buckets_count + 1),
                                   &info,
                                   HASH_ELEM | HASH_BLOBS);
-    memset(&info, 0, sizeof(info));
 
+    memset(&info, 0, sizeof(info));
     info.keysize = sizeof(char) * max_parameter_length;
     info.entrysize = sizeof(pgskIdFromString);
-
     string_to_id = ShmemInitHash("pg_stat_kcache string_to_id_htab",
                                  max_strings_count, max_strings_count,
                                  &info,
                                  HASH_ELEM | HASH_BLOBS);
+
     memset(&info, 0, sizeof(info));
     info.keysize = sizeof(int);
     info.entrysize = sizeof(pgskStringFromId);
@@ -386,6 +388,7 @@ pgsk_init(bool explicit_reset) {
     memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
     global_variables->keys_count = 0;
     global_variables->bucket = 0;
+    global_variables->required_max_strings_count = 0;
     if (!explicit_reset) {
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
@@ -412,6 +415,7 @@ static void
 pgsk_update_info() {
     int next_bucket;
     int key_in_bucket;
+    int64 stat_interval_ms;
     if (global_variables == NULL) {
         return;
     }
@@ -423,9 +427,13 @@ pgsk_update_info() {
         pop_key(next_bucket, key_in_bucket);
     }
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    stat_interval_ms = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e3;
     global_variables->bucket_fullness[next_bucket] = 0;
     global_variables->bucket = next_bucket;
+    global_variables->required_max_strings_count = 0;
     global_variables->last_update_timestamp = GetCurrentTimestamp();
+    if (global_variables->init_timestamp + stat_interval_ms < global_variables->last_update_timestamp)
+        global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_ms;
     LWLockRelease(&global_variables->lock);
 }
 
@@ -617,6 +625,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     char timestamp_right_s[max_parameter_length];
     long sec_diff;
     int msec_diff;
+    int current_bucket;
 
     Datum values[PG_STAT_KCACHE_COLS + 3];
     bool nulls[PG_STAT_KCACHE_COLS + 3];
@@ -676,6 +685,9 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         norm_right_ts = GetCurrentTimestamp();
 
     bucket_right = bucket_time_since_init % actual_buckets_count;
+    if (bucket_right > global_variables->bucket ||
+            (global_variables->bucket == actual_buckets_count - 1 && bucket_right == 0))
+        bucket_right = global_variables->bucket;
 
     strcpy(timestamp_left_s, timestamptz_to_str(norm_left_ts));
     strcpy(timestamp_right_s, timestamptz_to_str(norm_right_ts));
@@ -684,14 +696,15 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     bucket_interval = bucket_right - bucket_left + 1;
     bucket_index_0 = bucket_left;
     bucket_fullness = global_variables->bucket_fullness[global_variables->bucket];
+    current_bucket = global_variables->bucket;
     LWLockRelease(&global_variables->lock);
 
     for (delta_bucket = 0; delta_bucket < bucket_interval; ++delta_bucket) {
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-            if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
-                (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+            if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
+                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -738,8 +751,8 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         bucket_index = (bucket_index_0 + delta_bucket) % actual_buckets_count;
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-            if ((bucket_index == global_variables->bucket && key_index == bucket_fullness) ||
-                (bucket_index < global_variables->bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+            if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
+                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }

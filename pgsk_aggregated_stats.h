@@ -89,6 +89,7 @@ typedef struct global_info {
     int currents_strings_count;
     int max_strings_count;
     int bucket_duration;
+    int required_max_strings_count;
     LWLock lock;
     TimestampTz init_timestamp;
     TimestampTz last_update_timestamp;
