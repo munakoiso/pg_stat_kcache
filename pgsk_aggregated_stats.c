@@ -337,7 +337,6 @@ pop_key(int bucket, int key_in_bucket) {
     int i;
     int id;
     /* pgskIdFromString* id_pointer; */
-    char str_key[max_parameter_length];
     pgskStringFromId *string_struct;
     pgskCountersHtabValue *elem;
     pgskCountersHtabKey key;
@@ -353,6 +352,7 @@ pop_key(int bucket, int key_in_bucket) {
     }
     index = bucket * global_variables->max_strings_count + key_in_bucket;
     memcpy(&key.info, &global_variables->buckets[index], sizeof(key.info));
+    key.bucket = bucket;
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (found) {
         elem->counters.usage -= 1;
@@ -363,7 +363,7 @@ pop_key(int bucket, int key_in_bucket) {
             string_struct->counter -= 1;
             if (string_struct->counter == 0 && id != comment_key_not_specified) {
                 hash_search(id_to_string, (void *) &id, HASH_REMOVE, &found);
-                hash_search(string_to_id, (void *) &str_key, HASH_REMOVE, &found);
+                hash_search(string_to_id, (void *) string_struct->string, HASH_REMOVE, &found);
                 global_variables->currents_strings_count -= 1;
             }
         }
@@ -379,35 +379,33 @@ static void
 pgsk_init(bool explicit_reset) {
     int bucket;
     int key_in_bucket;
-
     /* Wait for all locks (in case of manual reset some locks can be acquired) */
     if (!explicit_reset) {
         LWLockInitialize(&global_variables->lock, LWLockNewTrancheId());
-    }
-    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-    memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
-    global_variables->keys_count = 0;
-    global_variables->bucket = 0;
-    global_variables->required_max_strings_count = 0;
-    if (!explicit_reset) {
+
+        LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
+        LWLockRelease(&global_variables->lock);
     }
-    LWLockRelease(&global_variables->lock);
+
     for (bucket = 0; bucket < actual_buckets_count; ++bucket) {
         for (key_in_bucket = 0; key_in_bucket < global_variables->max_strings_count; ++key_in_bucket) {
             pop_key(bucket, key_in_bucket);
         }
     }
 
+    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
+    global_variables->keys_count = 0;
+    global_variables->bucket = 0;
+    global_variables->required_max_strings_count = 0;
     if (explicit_reset) {
-        LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
-
-        LWLockRelease(&global_variables->lock);
     }
+    LWLockRelease(&global_variables->lock);
+
     global_variables->init_timestamp = GetCurrentTimestamp();
 }
 
@@ -428,7 +426,6 @@ pgsk_update_info() {
     }
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
     stat_interval_ms = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e3;
-    global_variables->bucket_fullness[next_bucket] = 0;
     global_variables->bucket = next_bucket;
     global_variables->required_max_strings_count = 0;
     global_variables->last_update_timestamp = GetCurrentTimestamp();
