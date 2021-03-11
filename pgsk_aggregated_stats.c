@@ -57,6 +57,11 @@ get_index_of_comment_key(char *key) {
         return comment_key_not_specified;
     }
 
+    for (i = 0; i < global_variables->excluded_keys_count; ++i) {
+        if (strcmp(key, global_variables->excluded_keys[i]) == 0)
+            return comment_key_not_specified;
+    }
+
     for (i = 0; i < global_variables->keys_count; ++i) {
         if (strcmp(key, global_variables->commentKeys[i]) == 0)
             return i;
@@ -95,16 +100,20 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
     query_prefix = strtok(query_copy, " ");
 
     for (i = 0; i < max_parameters_count; ++i) {
-        result->keyValues[i] = comment_key_not_specified;
+        result->keyValues[i] = comment_value_not_specified;
     }
     while (query_prefix != NULL) {
         len = strlen(query_prefix);
         if (strcmp(query_prefix + len - 1, end_of_key) == 0 && key_index == -1) {
             /* it's key */
+            query_prefix[len - 1] = '\0';
             key_index = get_index_of_comment_key(query_prefix);
         } else {
             /* it's value */
-
+            if (key_index == comment_key_not_specified) {
+                query_prefix = strtok(NULL, " ");
+                continue;
+            }
             value_id = get_id_from_string(query_prefix);
             if (value_id == -1) {
                 *is_comment_exist = false;
@@ -248,7 +257,7 @@ pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_
                                  &info,
                                  HASH_ELEM | HASH_BLOBS);
 
-    id = comment_key_not_specified;
+    id = comment_value_not_specified;
     stringFromId = hash_search(id_to_string, (void *) &id, HASH_ENTER, &found);
     global_variables->currents_strings_count = 1;
     stringFromId->id = id;
@@ -279,7 +288,7 @@ get_id_from_string(char *string_pointer) {
     int id;
     bool found;
     if (!string_to_id || !id_to_string)
-        return comment_key_not_specified;
+        return comment_value_not_specified;
     memset(&string, '\0', max_parameter_length);
     strcpy(string, string_pointer);
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
@@ -361,7 +370,7 @@ pop_key(int bucket, int key_in_bucket) {
             id = global_variables->buckets[index].keys.keyValues[i];
             string_struct = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
             string_struct->counter -= 1;
-            if (string_struct->counter == 0 && id != comment_key_not_specified) {
+            if (string_struct->counter == 0 && id != comment_value_not_specified) {
                 hash_search(id_to_string, (void *) &id, HASH_REMOVE, &found);
                 hash_search(string_to_id, (void *) string_struct->string, HASH_REMOVE, &found);
                 global_variables->currents_strings_count -= 1;
@@ -397,6 +406,8 @@ pgsk_init(bool explicit_reset) {
 
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
     memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
+    memset(&global_variables->excluded_keys, '\0', sizeof(global_variables->excluded_keys));
+    global_variables->excluded_keys_count = 0;
     global_variables->keys_count = 0;
     global_variables->bucket = 0;
     global_variables->required_max_strings_count = 0;
@@ -530,7 +541,7 @@ get_jsonb_datum_from_key(pgskKeysArray *keys) {
     initStringInfo(&strbuf);
     appendStringInfoChar(&strbuf, '{');
     for (i = 0; i < global_variables->keys_count; ++i) {
-        if (keys->keyValues[i] == comment_key_not_specified) {
+        if (keys->keyValues[i] == comment_value_not_specified) {
             continue;
         }
         memset(&component, '\0', sizeof(component));
@@ -833,4 +844,95 @@ pgsk_reset_stats(PG_FUNCTION_ARGS) {
     pgsk_init(true);
 
     PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(pgsk_exclude_key);
+
+Datum
+pgsk_exclude_key(PG_FUNCTION_ARGS) {
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+
+    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    if (global_variables->excluded_keys_count == max_parameters_count) {
+        elog(WARNING, "pgsk: Can't exclude more than %d keys. You can drop existing keys by 'pgsk_reset_stats'",
+             max_parameters_count);
+    }
+    else {
+        strlcpy(&global_variables->excluded_keys[global_variables->excluded_keys_count][0], PG_GETARG_CSTRING(0), max_parameter_length - 1);
+        global_variables->excluded_keys_count++;
+    }
+    LWLockRelease(&global_variables->lock);
+
+    PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(pgsk_get_excluded_keys);
+
+Datum
+pgsk_get_excluded_keys(PG_FUNCTION_ARGS) {
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    Tuplestorestate *tupstore;
+    TupleDesc tupdesc;
+    MemoryContext per_query_ctx;
+    MemoryContext oldcontext;
+    Datum values[1];
+    bool nulls[1];
+    int i;
+
+    /* Shmem structs not ready yet */
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+    /* check to see if caller supports us returning a tuplestore */
+    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("set-valued function called in context that cannot accept a set")));
+    if (!(rsinfo->allowedModes & SFRM_Materialize))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("materialize mode required, but it is not allowed in this context")));
+
+    /* Build a tuple descriptor for our result type */
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_SCALAR)
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("return type must be a scalar type")));
+    per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+    oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    rsinfo->setDesc = tupdesc;
+    MemoryContextSwitchTo(oldcontext);
+
+    MemSet(values, 0, sizeof(values));
+    MemSet(nulls, 0, sizeof(nulls));
+#if PG_VERSION_NUM >= 120000
+    tupdesc = CreateTemplateTupleDesc(1);
+#else
+    tupdesc = CreateTemplateTupleDesc(1, false);
+#endif
+    TupleDescInitEntry(tupdesc, (AttrNumber) 1, "excluded_key",
+                       TEXTOID, -1, 0);
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    elog(LOG, "tupdesc->natts %d", tupdesc->natts);
+    LWLockAcquire(&global_variables->lock, LW_SHARED);
+    for (i = 0; i < global_variables->excluded_keys_count; ++i) {
+        values[0] = CStringGetTextDatum(global_variables->excluded_keys[i]);
+        nulls[0] = false;
+        tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+
+    LWLockRelease(&global_variables->lock);
+
+    tuplestore_donestoring(tupstore);
+    return (Datum) 0;
 }
