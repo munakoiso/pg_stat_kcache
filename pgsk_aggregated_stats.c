@@ -388,6 +388,8 @@ static void
 pgsk_init(bool explicit_reset) {
     int bucket;
     int key_in_bucket;
+
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     /* Wait for all locks (in case of manual reset some locks can be acquired) */
     if (!explicit_reset) {
         LWLockInitialize(&global_variables->lock, LWLockNewTrancheId());
@@ -418,6 +420,7 @@ pgsk_init(bool explicit_reset) {
     LWLockRelease(&global_variables->lock);
 
     global_variables->init_timestamp = GetCurrentTimestamp();
+    LWLockRelease(&global_variables->reset_lock);
 }
 
 static void
@@ -453,6 +456,7 @@ pg_stat_kcache_main(Datum main_arg) {
     /* We're now ready to receive signals */
     BackgroundWorkerUnblockSignals();
 
+    LWLockInitialize(&global_variables->reset_lock, LWLockNewTrancheId());
     pgsk_init(false);
     while (!got_sigterm) {
         int rc;
@@ -672,6 +676,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     MemSet(&key, 0, sizeof(pgskCountersHtabKey));
     MemSet(key_name, 0, sizeof(key_name));
 
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     /* aggregate in bucket_ind = -1 all stats */
     LWLockAcquire(&global_variables->lock, LW_SHARED);
 
@@ -827,6 +832,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         }
     }
 
+    LWLockRelease(&global_variables->reset_lock);
     /* return the tuplestore */
     tuplestore_donestoring(tupstore);
     return (Datum) 0;
