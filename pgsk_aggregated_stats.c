@@ -86,9 +86,9 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
     start_of_comment = strstr(query, "/*");
     end_of_comment = strstr(query, "*/");
 
+    *is_comment_exist = false;
     if (start_of_comment == NULL || end_of_comment == NULL) {
         result = NULL;
-        *is_comment_exist = false;
         return;
     }
 
@@ -116,9 +116,9 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
             }
             value_id = get_id_from_string(query_prefix);
             if (value_id == -1) {
-                *is_comment_exist = false;
                 return;
             }
+            *is_comment_exist = true;
             result->keyValues[key_index] = value_id;
             key_index = -1;
         }
@@ -164,6 +164,7 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
         if (global_variables->bucket_fullness[key.bucket] == global_variables->max_strings_count) {
             elog(LOG, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
             elog(LOG, "pgsk: Required max strings count %d", global_variables->required_max_strings_count);
+
             LWLockRelease(&global_variables->lock);
             return;
         }
@@ -427,10 +428,11 @@ static void
 pgsk_update_info() {
     int next_bucket;
     int key_in_bucket;
-    int64 stat_interval_ms;
+    int64 stat_interval_microsec;
     if (global_variables == NULL) {
         return;
     }
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     LWLockAcquire(&global_variables->lock, LW_SHARED);
     next_bucket = (global_variables->bucket + 1) % actual_buckets_count;
     LWLockRelease(&global_variables->lock);
@@ -439,17 +441,21 @@ pgsk_update_info() {
         pop_key(next_bucket, key_in_bucket);
     }
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-    stat_interval_ms = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e3;
+    stat_interval_microsec = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e6;
     global_variables->bucket = next_bucket;
     global_variables->required_max_strings_count = 0;
+    global_variables->bucket_fullness[next_bucket] = 0;
     global_variables->last_update_timestamp = GetCurrentTimestamp();
-    if (global_variables->init_timestamp + stat_interval_ms < global_variables->last_update_timestamp)
-        global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_ms;
+    if (next_bucket == 0)
+        global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_microsec;
     LWLockRelease(&global_variables->lock);
+    LWLockRelease(&global_variables->reset_lock);
 }
 
 void
 pg_stat_kcache_main(Datum main_arg) {
+    TimestampTz timestamp;
+    int64 wait_microsec;
     /* Register functions for SIGTERM management */
     pqsignal(SIGTERM, pg_stat_kcache_sigterm);
 
@@ -458,18 +464,19 @@ pg_stat_kcache_main(Datum main_arg) {
 
     LWLockInitialize(&global_variables->reset_lock, LWLockNewTrancheId());
     pgsk_init(false);
+    wait_microsec = global_variables->bucket_duration * 1e6;
     while (!got_sigterm) {
         int rc;
+
         /* Wait necessary amount of time */
         rc = WaitLatch(&MyProc->procLatch,
-                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, global_variables->bucket_duration * 1000, PG_WAIT_EXTENSION);
-
-        ResetLatch(&MyProc->procLatch);
+                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, wait_microsec / 1000, PG_WAIT_EXTENSION);
         /* Emergency bailout if postmaster has died */
         if (rc & WL_POSTMASTER_DEATH)
             proc_exit(1);
         /* Process signals */
-
+        timestamp = GetCurrentTimestamp();
+        ResetLatch(&MyProc->procLatch);
         if (got_sigterm) {
             /* Simply exit */
             elog(DEBUG1, "bgworker pg_stat_kcache signal: processed SIGTERM");
@@ -477,6 +484,9 @@ pg_stat_kcache_main(Datum main_arg) {
         }
         /* Main work happens here */
         pgsk_update_info();
+        wait_microsec = (int64) global_variables->bucket_duration * 1e6 - (GetCurrentTimestamp() - timestamp);
+        if (wait_microsec < 0)
+            wait_microsec = 0;
     }
 
     /* No problems, so clean exit */
@@ -635,7 +645,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     int64 bucket_time_since_init;
     char timestamp_left_s[max_parameter_length];
     char timestamp_right_s[max_parameter_length];
-    long sec_diff;
+    int64 sec_diff;
     int msec_diff;
     int current_bucket;
 
@@ -706,7 +716,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     strcpy(timestamp_right_s, timestamptz_to_str(norm_right_ts));
     elog(NOTICE, "pgsk: Show stats from '%s' to '%s'", timestamp_left_s, timestamp_right_s);
 
-    bucket_interval = bucket_right - bucket_left + 1;
+    bucket_interval = (bucket_right - bucket_left + 1 + actual_buckets_count) % actual_buckets_count;
     bucket_index_0 = bucket_left;
     bucket_fullness = global_variables->bucket_fullness[global_variables->bucket];
     current_bucket = global_variables->bucket;
@@ -717,7 +727,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
-                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+                (bucket_index != current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -727,7 +737,12 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
             key.bucket = bucket_index;
 
             elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
-
+            if (!found) {
+                /* Should never reach that place */
+                elog(WARNING, "pgsk: Key from buffer not found");
+                LWLockRelease(&global_variables->lock);
+                continue;
+            }
             key.bucket = -1;
 
             tmp = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
@@ -765,7 +780,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
-                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+                (bucket_index != current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
