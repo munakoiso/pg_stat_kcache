@@ -154,6 +154,7 @@ static int	pgsk_linux_hz;
 
 static int stat_time_interval;
 static int buffer_size_mb;
+char* excluded_keys = NULL;
 
 static void
 define_custom_variables(void) {
@@ -197,6 +198,17 @@ define_custom_variables(void) {
                             NULL,
                             NULL,
                             NULL);
+
+    DefineCustomStringVariable("pg_stat_kcache.excluded_keys",
+                               "Excluded keys separated by ','",
+                               NULL,
+                               &excluded_keys,
+                               NULL,
+                               PGC_POSTMASTER,
+                               0,    /* no flags required */
+                               NULL,
+                               NULL,
+                               NULL);
 }
 
 void
@@ -320,7 +332,7 @@ pgsk_shmem_startup(void)
 							  &info,
 							  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE);
 
-    pgsk_define_custom_shmem_vars(info, buffer_size_mb, stat_time_interval);
+    pgsk_define_custom_shmem_vars(info, buffer_size_mb, stat_time_interval, excluded_keys);
 	LWLockRelease(AddinShmemInitLock);
 
 	if (!IsUnderPostmaster)

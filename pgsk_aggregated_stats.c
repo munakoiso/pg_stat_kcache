@@ -200,7 +200,7 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
 }
 
 void
-pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_interval) {
+pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_interval, char* excluded_keys) {
     bool                found_global_info;
     bool                found;
     int                 id;
@@ -212,6 +212,8 @@ pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_
     int counters_htab_size;
     int string_to_id_htab_size;
     int id_to_string_htab_size;
+    char excluded_keys_copy[max_parameters_count * max_parameter_length];
+    char* excluded_key;
 
     global_var_const_size = sizeof(GlobalInfo);
     counters_htab_size = (sizeof(pgskCountersHtabKey) + sizeof(pgskCountersHtabValue)) * (actual_buckets_count + 1);
@@ -263,6 +265,24 @@ pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_
     global_variables->currents_strings_count = 1;
     stringFromId->id = id;
     memset(stringFromId->string, '\0', sizeof(stringFromId->string));
+
+    memset(&global_variables->excluded_keys, '\0', sizeof(global_variables->excluded_keys));
+    global_variables->excluded_keys_count = 0;
+
+    if (excluded_keys == NULL)
+        return;
+
+    /* make sure that variable not too long */
+    memset(&excluded_keys_copy, '\0', sizeof(excluded_keys_copy));
+    strlcpy(&excluded_keys_copy[0], excluded_keys, max_parameters_count * max_parameter_length);
+
+    excluded_key = strtok(excluded_keys_copy, ",");
+    while (excluded_key != NULL) {
+        strlcpy(&global_variables->excluded_keys[global_variables->excluded_keys_count][0], excluded_key, max_parameter_length - 1);
+        global_variables->excluded_keys_count += 1;
+
+        excluded_key = strtok(NULL, " ");
+    }
 }
 
 void
@@ -409,8 +429,6 @@ pgsk_init(bool explicit_reset) {
 
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
     memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
-    memset(&global_variables->excluded_keys, '\0', sizeof(global_variables->excluded_keys));
-    global_variables->excluded_keys_count = 0;
     global_variables->keys_count = 0;
     global_variables->bucket = 0;
     global_variables->required_max_strings_count = 0;
@@ -956,4 +974,20 @@ pgsk_get_excluded_keys(PG_FUNCTION_ARGS) {
 
     tuplestore_donestoring(tupstore);
     return (Datum) 0;
+}
+
+PG_FUNCTION_INFO_V1(pgsk_reset_excluded_keys);
+
+Datum
+pgsk_reset_excluded_keys(PG_FUNCTION_ARGS) {
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+
+    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    memset(&global_variables->excluded_keys, '\0', sizeof(global_variables->excluded_keys));
+    global_variables->excluded_keys_count = 0;
+    LWLockRelease(&global_variables->lock);
+    PG_RETURN_VOID();
 }
