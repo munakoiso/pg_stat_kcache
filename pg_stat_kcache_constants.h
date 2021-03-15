@@ -6,7 +6,8 @@
 #define actual_buckets_count 105
 #define max_parameter_length 256
 #define max_parameters_count 5
-#define comment_key_not_specified 0
+#define comment_key_not_specified -1
+#define comment_value_not_specified 0
 
 #define RUSAGE_BLOCK_SIZE	512			/* Size of a block for getrusage() */
 #define PG_STAT_KCACHE_COLS_V2_0	7

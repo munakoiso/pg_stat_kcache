@@ -15,6 +15,7 @@
 #include "nodes/execnodes.h"
 #include "storage/ipc.h"
 #include "utils/builtins.h"
+#include "catalog/pg_type.h"
 
 #include "pg_stat_kcache_constants.h"
 
@@ -84,6 +85,8 @@ typedef struct pgskCountersHtabValue {
 typedef struct global_info {
     int bucket;
     char commentKeys[max_parameters_count][max_parameter_length];
+    char excluded_keys[max_parameter_length][max_parameter_length];
+    int excluded_keys_count;
     int bucket_fullness[actual_buckets_count];
     int keys_count;
     int currents_strings_count;
@@ -91,6 +94,7 @@ typedef struct global_info {
     int bucket_duration;
     int required_max_strings_count;
     LWLock lock;
+    LWLock reset_lock;
     TimestampTz init_timestamp;
     TimestampTz last_update_timestamp;
     pgskBucketItem buckets[FLEXIBLE_ARRAY_MEMBER];

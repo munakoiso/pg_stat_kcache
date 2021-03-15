@@ -52,3 +52,14 @@ CREATE FUNCTION pgsk_reset_stats()
     RETURNS void
 AS 'MODULE_PATHNAME', 'pgsk_reset_stats'
     LANGUAGE C STRICT;
+
+CREATE FUNCTION pgsk_exclude_key(
+    exclude_string  cstring
+)
+    RETURNS void
+AS 'MODULE_PATHNAME', 'pgsk_exclude_key'
+    LANGUAGE C STRICT;
+
+CREATE FUNCTION pgsk_get_excluded_keys() RETURNS SETOF text
+AS 'MODULE_PATHNAME', 'pgsk_get_excluded_keys'
+    LANGUAGE C STRICT;

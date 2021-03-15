@@ -57,6 +57,11 @@ get_index_of_comment_key(char *key) {
         return comment_key_not_specified;
     }
 
+    for (i = 0; i < global_variables->excluded_keys_count; ++i) {
+        if (strcmp(key, global_variables->excluded_keys[i]) == 0)
+            return comment_key_not_specified;
+    }
+
     for (i = 0; i < global_variables->keys_count; ++i) {
         if (strcmp(key, global_variables->commentKeys[i]) == 0)
             return i;
@@ -81,9 +86,9 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
     start_of_comment = strstr(query, "/*");
     end_of_comment = strstr(query, "*/");
 
+    *is_comment_exist = false;
     if (start_of_comment == NULL || end_of_comment == NULL) {
         result = NULL;
-        *is_comment_exist = false;
         return;
     }
 
@@ -95,21 +100,25 @@ get_pgskKeysArray_by_query(char *query, pgskKeysArray *result, bool *is_comment_
     query_prefix = strtok(query_copy, " ");
 
     for (i = 0; i < max_parameters_count; ++i) {
-        result->keyValues[i] = comment_key_not_specified;
+        result->keyValues[i] = comment_value_not_specified;
     }
     while (query_prefix != NULL) {
         len = strlen(query_prefix);
         if (strcmp(query_prefix + len - 1, end_of_key) == 0 && key_index == -1) {
             /* it's key */
+            query_prefix[len - 1] = '\0';
             key_index = get_index_of_comment_key(query_prefix);
         } else {
             /* it's value */
-
+            if (key_index == comment_key_not_specified) {
+                query_prefix = strtok(NULL, " ");
+                continue;
+            }
             value_id = get_id_from_string(query_prefix);
             if (value_id == -1) {
-                *is_comment_exist = false;
                 return;
             }
+            *is_comment_exist = true;
             result->keyValues[key_index] = value_id;
             key_index = -1;
         }
@@ -155,6 +164,7 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
         if (global_variables->bucket_fullness[key.bucket] == global_variables->max_strings_count) {
             elog(LOG, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
             elog(LOG, "pgsk: Required max strings count %d", global_variables->required_max_strings_count);
+
             LWLockRelease(&global_variables->lock);
             return;
         }
@@ -248,7 +258,7 @@ pgsk_define_custom_shmem_vars(HASHCTL info, int _buffer_size_mb, int _stat_time_
                                  &info,
                                  HASH_ELEM | HASH_BLOBS);
 
-    id = comment_key_not_specified;
+    id = comment_value_not_specified;
     stringFromId = hash_search(id_to_string, (void *) &id, HASH_ENTER, &found);
     global_variables->currents_strings_count = 1;
     stringFromId->id = id;
@@ -279,7 +289,7 @@ get_id_from_string(char *string_pointer) {
     int id;
     bool found;
     if (!string_to_id || !id_to_string)
-        return comment_key_not_specified;
+        return comment_value_not_specified;
     memset(&string, '\0', max_parameter_length);
     strcpy(string, string_pointer);
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
@@ -337,7 +347,6 @@ pop_key(int bucket, int key_in_bucket) {
     int i;
     int id;
     /* pgskIdFromString* id_pointer; */
-    char str_key[max_parameter_length];
     pgskStringFromId *string_struct;
     pgskCountersHtabValue *elem;
     pgskCountersHtabKey key;
@@ -353,6 +362,7 @@ pop_key(int bucket, int key_in_bucket) {
     }
     index = bucket * global_variables->max_strings_count + key_in_bucket;
     memcpy(&key.info, &global_variables->buckets[index], sizeof(key.info));
+    key.bucket = bucket;
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (found) {
         elem->counters.usage -= 1;
@@ -361,9 +371,9 @@ pop_key(int bucket, int key_in_bucket) {
             id = global_variables->buckets[index].keys.keyValues[i];
             string_struct = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
             string_struct->counter -= 1;
-            if (string_struct->counter == 0 && id != comment_key_not_specified) {
+            if (string_struct->counter == 0 && id != comment_value_not_specified) {
                 hash_search(id_to_string, (void *) &id, HASH_REMOVE, &found);
-                hash_search(string_to_id, (void *) &str_key, HASH_REMOVE, &found);
+                hash_search(string_to_id, (void *) string_struct->string, HASH_REMOVE, &found);
                 global_variables->currents_strings_count -= 1;
             }
         }
@@ -380,45 +390,49 @@ pgsk_init(bool explicit_reset) {
     int bucket;
     int key_in_bucket;
 
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     /* Wait for all locks (in case of manual reset some locks can be acquired) */
     if (!explicit_reset) {
         LWLockInitialize(&global_variables->lock, LWLockNewTrancheId());
-    }
-    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-    memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
-    global_variables->keys_count = 0;
-    global_variables->bucket = 0;
-    global_variables->required_max_strings_count = 0;
-    if (!explicit_reset) {
+
+        LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
+        LWLockRelease(&global_variables->lock);
     }
-    LWLockRelease(&global_variables->lock);
+
     for (bucket = 0; bucket < actual_buckets_count; ++bucket) {
         for (key_in_bucket = 0; key_in_bucket < global_variables->max_strings_count; ++key_in_bucket) {
             pop_key(bucket, key_in_bucket);
         }
     }
 
+    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    memset(&global_variables->commentKeys, '\0', sizeof(global_variables->commentKeys));
+    memset(&global_variables->excluded_keys, '\0', sizeof(global_variables->excluded_keys));
+    global_variables->excluded_keys_count = 0;
+    global_variables->keys_count = 0;
+    global_variables->bucket = 0;
+    global_variables->required_max_strings_count = 0;
     if (explicit_reset) {
-        LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
-
-        LWLockRelease(&global_variables->lock);
     }
+    LWLockRelease(&global_variables->lock);
+
     global_variables->init_timestamp = GetCurrentTimestamp();
+    LWLockRelease(&global_variables->reset_lock);
 }
 
 static void
 pgsk_update_info() {
     int next_bucket;
     int key_in_bucket;
-    int64 stat_interval_ms;
+    int64 stat_interval_microsec;
     if (global_variables == NULL) {
         return;
     }
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     LWLockAcquire(&global_variables->lock, LW_SHARED);
     next_bucket = (global_variables->bucket + 1) % actual_buckets_count;
     LWLockRelease(&global_variables->lock);
@@ -427,37 +441,42 @@ pgsk_update_info() {
         pop_key(next_bucket, key_in_bucket);
     }
     LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
-    stat_interval_ms = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e3;
-    global_variables->bucket_fullness[next_bucket] = 0;
+    stat_interval_microsec = ((int64)global_variables->bucket_duration) * actual_buckets_count * 1e6;
     global_variables->bucket = next_bucket;
     global_variables->required_max_strings_count = 0;
+    global_variables->bucket_fullness[next_bucket] = 0;
     global_variables->last_update_timestamp = GetCurrentTimestamp();
-    if (global_variables->init_timestamp + stat_interval_ms < global_variables->last_update_timestamp)
-        global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_ms;
+    if (next_bucket == 0)
+        global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_microsec;
     LWLockRelease(&global_variables->lock);
+    LWLockRelease(&global_variables->reset_lock);
 }
 
 void
 pg_stat_kcache_main(Datum main_arg) {
+    TimestampTz timestamp;
+    int64 wait_microsec;
     /* Register functions for SIGTERM management */
     pqsignal(SIGTERM, pg_stat_kcache_sigterm);
 
     /* We're now ready to receive signals */
     BackgroundWorkerUnblockSignals();
 
+    LWLockInitialize(&global_variables->reset_lock, LWLockNewTrancheId());
     pgsk_init(false);
+    wait_microsec = global_variables->bucket_duration * 1e6;
     while (!got_sigterm) {
         int rc;
+
         /* Wait necessary amount of time */
         rc = WaitLatch(&MyProc->procLatch,
-                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, global_variables->bucket_duration * 1000, PG_WAIT_EXTENSION);
-
-        ResetLatch(&MyProc->procLatch);
+                       WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, wait_microsec / 1000, PG_WAIT_EXTENSION);
         /* Emergency bailout if postmaster has died */
         if (rc & WL_POSTMASTER_DEATH)
             proc_exit(1);
         /* Process signals */
-
+        timestamp = GetCurrentTimestamp();
+        ResetLatch(&MyProc->procLatch);
         if (got_sigterm) {
             /* Simply exit */
             elog(DEBUG1, "bgworker pg_stat_kcache signal: processed SIGTERM");
@@ -465,6 +484,9 @@ pg_stat_kcache_main(Datum main_arg) {
         }
         /* Main work happens here */
         pgsk_update_info();
+        wait_microsec = (int64) global_variables->bucket_duration * 1e6 - (GetCurrentTimestamp() - timestamp);
+        if (wait_microsec < 0)
+            wait_microsec = 0;
     }
 
     /* No problems, so clean exit */
@@ -533,7 +555,7 @@ get_jsonb_datum_from_key(pgskKeysArray *keys) {
     initStringInfo(&strbuf);
     appendStringInfoChar(&strbuf, '{');
     for (i = 0; i < global_variables->keys_count; ++i) {
-        if (keys->keyValues[i] == comment_key_not_specified) {
+        if (keys->keyValues[i] == comment_value_not_specified) {
             continue;
         }
         memset(&component, '\0', sizeof(component));
@@ -623,7 +645,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     int64 bucket_time_since_init;
     char timestamp_left_s[max_parameter_length];
     char timestamp_right_s[max_parameter_length];
-    long sec_diff;
+    int64 sec_diff;
     int msec_diff;
     int current_bucket;
 
@@ -664,6 +686,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     MemSet(&key, 0, sizeof(pgskCountersHtabKey));
     MemSet(key_name, 0, sizeof(key_name));
 
+    LWLockAcquire(&global_variables->reset_lock, LW_EXCLUSIVE);
     /* aggregate in bucket_ind = -1 all stats */
     LWLockAcquire(&global_variables->lock, LW_SHARED);
 
@@ -693,7 +716,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
     strcpy(timestamp_right_s, timestamptz_to_str(norm_right_ts));
     elog(NOTICE, "pgsk: Show stats from '%s' to '%s'", timestamp_left_s, timestamp_right_s);
 
-    bucket_interval = bucket_right - bucket_left + 1;
+    bucket_interval = (bucket_right - bucket_left + 1 + actual_buckets_count) % actual_buckets_count;
     bucket_index_0 = bucket_left;
     bucket_fullness = global_variables->bucket_fullness[global_variables->bucket];
     current_bucket = global_variables->bucket;
@@ -704,7 +727,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
-                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+                (bucket_index != current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -714,7 +737,12 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
             key.bucket = bucket_index;
 
             elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
-
+            if (!found) {
+                /* Should never reach that place */
+                elog(WARNING, "pgsk: Key from buffer not found");
+                LWLockRelease(&global_variables->lock);
+                continue;
+            }
             key.bucket = -1;
 
             tmp = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
@@ -752,7 +780,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         for (key_index = 0; key_index < global_variables->max_strings_count; ++key_index) {
             LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
             if ((bucket_index == current_bucket && key_index == bucket_fullness) ||
-                (bucket_index < current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
+                (bucket_index != current_bucket && key_index == global_variables->bucket_fullness[bucket_index])) {
                 LWLockRelease(&global_variables->lock);
                 break;
             }
@@ -819,6 +847,7 @@ pgsk_internal_get_stats_time_interval(TimestampTz timestamp_left, TimestampTz ti
         }
     }
 
+    LWLockRelease(&global_variables->reset_lock);
     /* return the tuplestore */
     tuplestore_donestoring(tupstore);
     return (Datum) 0;
@@ -836,4 +865,95 @@ pgsk_reset_stats(PG_FUNCTION_ARGS) {
     pgsk_init(true);
 
     PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(pgsk_exclude_key);
+
+Datum
+pgsk_exclude_key(PG_FUNCTION_ARGS) {
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+
+    LWLockAcquire(&global_variables->lock, LW_EXCLUSIVE);
+    if (global_variables->excluded_keys_count == max_parameters_count) {
+        elog(WARNING, "pgsk: Can't exclude more than %d keys. You can drop existing keys by 'pgsk_reset_stats'",
+             max_parameters_count);
+    }
+    else {
+        strlcpy(&global_variables->excluded_keys[global_variables->excluded_keys_count][0], PG_GETARG_CSTRING(0), max_parameter_length - 1);
+        global_variables->excluded_keys_count++;
+    }
+    LWLockRelease(&global_variables->lock);
+
+    PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(pgsk_get_excluded_keys);
+
+Datum
+pgsk_get_excluded_keys(PG_FUNCTION_ARGS) {
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    Tuplestorestate *tupstore;
+    TupleDesc tupdesc;
+    MemoryContext per_query_ctx;
+    MemoryContext oldcontext;
+    Datum values[1];
+    bool nulls[1];
+    int i;
+
+    /* Shmem structs not ready yet */
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+    /* check to see if caller supports us returning a tuplestore */
+    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("set-valued function called in context that cannot accept a set")));
+    if (!(rsinfo->allowedModes & SFRM_Materialize))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("materialize mode required, but it is not allowed in this context")));
+
+    /* Build a tuple descriptor for our result type */
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_SCALAR)
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("return type must be a scalar type")));
+    per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+    oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    rsinfo->setDesc = tupdesc;
+    MemoryContextSwitchTo(oldcontext);
+
+    MemSet(values, 0, sizeof(values));
+    MemSet(nulls, 0, sizeof(nulls));
+#if PG_VERSION_NUM >= 120000
+    tupdesc = CreateTemplateTupleDesc(1);
+#else
+    tupdesc = CreateTemplateTupleDesc(1, false);
+#endif
+    TupleDescInitEntry(tupdesc, (AttrNumber) 1, "excluded_key",
+                       TEXTOID, -1, 0);
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    elog(LOG, "tupdesc->natts %d", tupdesc->natts);
+    LWLockAcquire(&global_variables->lock, LW_SHARED);
+    for (i = 0; i < global_variables->excluded_keys_count; ++i) {
+        values[0] = CStringGetTextDatum(global_variables->excluded_keys[i]);
+        nulls[0] = false;
+        tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+
+    LWLockRelease(&global_variables->lock);
+
+    tuplestore_donestoring(tupstore);
+    return (Datum) 0;
 }
