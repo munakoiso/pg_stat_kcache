@@ -101,7 +101,7 @@ typedef struct global_info {
 } GlobalInfo;
 
 void pgsk_register_bgworker(void);
-void pgsk_define_custom_shmem_vars(HASHCTL, int, int);
+void pgsk_define_custom_shmem_vars(HASHCTL, int, int, char*);
 void pgsk_store_aggregated_counters(pgskCounters*, QueryDesc*);
 
 #endif
