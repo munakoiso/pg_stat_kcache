@@ -162,9 +162,11 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
     if (!found) {
         global_variables->required_max_strings_count += 1;
         if (global_variables->bucket_fullness[key.bucket] == global_variables->max_strings_count) {
-            elog(LOG, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
-            elog(LOG, "pgsk: Required max strings count %d", global_variables->required_max_strings_count);
-
+            if (!global_variables->bucket_is_full) {
+                elog(WARNING, "pgsk: Bucket %d is full. That case not solved yet, skipping...", global_variables->bucket);
+                elog(LOG, "pgsk: Required max strings count %d", global_variables->required_max_strings_count);
+            }
+            global_variables->bucket_is_full = true;
             LWLockRelease(&global_variables->lock);
             return;
         }
@@ -335,10 +337,13 @@ get_id_from_string(char *string_pointer) {
             strcpy(idFromString->string, string);
             idFromString->id = id;
         } else {
-            elog(WARNING,
-                 "pgsk: Can't handle request. No more memory for save strings are available. "
-                 "Current max count of unique strings = %d."
-                 "Decide to tune pg_stat_kcache.buffer_size", global_variables->max_strings_count);
+            if (!global_variables->max_strings_count_achieved) {
+                elog(WARNING,
+                     "pgsk: Can't handle request. No more memory for save strings are available. "
+                     "Current max count of unique strings = %d."
+                     "Decide to tune pg_stat_kcache.buffer_size", global_variables->max_strings_count);
+            }
+            global_variables->max_strings_count_achieved = true;
             LWLockRelease(&global_variables->lock);
             return -1;
         }
@@ -436,6 +441,10 @@ pgsk_init(bool explicit_reset) {
         memset(&global_variables->buckets, 0, sizeof(pgskBucketItem) * actual_buckets_count * global_variables->max_strings_count);
         memset(&global_variables->bucket_fullness, 0, sizeof(global_variables->bucket_fullness));
     }
+
+    global_variables->max_strings_count_achieved = false;
+    global_variables->bucket_is_full = false;
+
     LWLockRelease(&global_variables->lock);
 
     global_variables->init_timestamp = GetCurrentTimestamp();
@@ -466,6 +475,9 @@ pgsk_update_info() {
     global_variables->last_update_timestamp = GetCurrentTimestamp();
     if (next_bucket == 0)
         global_variables->init_timestamp = global_variables->last_update_timestamp - stat_interval_microsec;
+    /* Warning will be displayed no more than once per bucket_time = stat_time_interval / buckets_count */
+    global_variables->max_strings_count_achieved = false;
+    global_variables->bucket_is_full = false;
     LWLockRelease(&global_variables->lock);
     LWLockRelease(&global_variables->reset_lock);
 }
@@ -962,7 +974,6 @@ pgsk_get_excluded_keys(PG_FUNCTION_ARGS) {
                        TEXTOID, -1, 0);
     tupdesc = BlessTupleDesc(tupdesc);
 
-    elog(LOG, "tupdesc->natts %d", tupdesc->natts);
     LWLockAcquire(&global_variables->lock, LW_SHARED);
     for (i = 0; i < global_variables->excluded_keys_count; ++i) {
         values[0] = CStringGetTextDatum(global_variables->excluded_keys[i]);

@@ -97,6 +97,8 @@ typedef struct global_info {
     LWLock reset_lock;
     TimestampTz init_timestamp;
     TimestampTz last_update_timestamp;
+    bool max_strings_count_achieved;
+    bool bucket_is_full;
     pgskBucketItem buckets[FLEXIBLE_ARRAY_MEMBER];
 } GlobalInfo;
 
