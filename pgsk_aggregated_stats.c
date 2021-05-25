@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include "access/tupdesc.h"
+#include "access/htup_details.h"
 #include "lib/stringinfo.h"
 #include "postmaster/bgworker.h"
 #include "storage/lwlock.h"
@@ -983,6 +984,74 @@ pgsk_get_excluded_keys(PG_FUNCTION_ARGS) {
 
     LWLockRelease(&global_variables->lock);
 
+    tuplestore_donestoring(tupstore);
+    return (Datum) 0;
+}
+
+PG_FUNCTION_INFO_V1(pgsk_get_buffer_stats);
+
+Datum
+pgsk_get_buffer_stats(PG_FUNCTION_ARGS) {
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    Tuplestorestate *tupstore;
+    TupleDesc tupdesc;
+    MemoryContext per_query_ctx;
+    MemoryContext oldcontext;
+    Datum values[BUFFER_STATS_COUNT];
+    bool nulls[BUFFER_STATS_COUNT];
+
+    /* Shmem structs not ready yet */
+    if (!global_variables)
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                        errmsg("pg_stat_kcache must be loaded via shared_preload_libraries")));
+    /* check to see if caller supports us returning a tuplestore */
+    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("set-valued function called in context that cannot accept a set")));
+    if (!(rsinfo->allowedModes & SFRM_Materialize))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("materialize mode required, but it is not allowed in this context")));
+
+    /* Build a tuple descriptor for our result type */
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                        errmsg("return type must be a row type")));
+    per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+    oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+
+    rsinfo->setDesc = tupdesc;
+    MemoryContextSwitchTo(oldcontext);
+
+    MemSet(values, 0, sizeof(values));
+    MemSet(nulls, 0, sizeof(nulls));
+#if PG_VERSION_NUM >= 120000
+    tupdesc = CreateTemplateTupleDesc(BUFFER_STATS_COUNT);
+#else
+    tupdesc = CreateTemplateTupleDesc(BUFFER_STATS_COUNT, false);
+#endif
+    TupleDescInitEntry(tupdesc, (AttrNumber) 1, "saved_strings_count",
+                       INT4OID, -1, 0);
+    TupleDescInitEntry(tupdesc, (AttrNumber) 2, "available_strings_count",
+                       INT4OID, -1, 0);
+    TupleDescInitEntry(tupdesc, (AttrNumber) 3, "current_buffer_fullness",
+                       INT4OID, -1, 0);
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    LWLockAcquire(&global_variables->lock, LW_SHARED);
+    values[0] = Int32GetDatum(global_variables->currents_strings_count);
+    values[1] = Int32GetDatum(global_variables->max_strings_count);
+    values[2] = Int32GetDatum(global_variables->bucket_fullness[global_variables->bucket]);
+
+    LWLockRelease(&global_variables->lock);
+    tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     tuplestore_donestoring(tupstore);
     return (Datum) 0;
 }

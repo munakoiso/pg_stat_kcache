@@ -18,3 +18,5 @@
 #define USAGE_DECREASE_FACTOR	(0.99)	/* decreased every pgsk_entry_dealloc */
 #define USAGE_DEALLOC_PERCENT	5		/* free this % of entries at once */
 #define USAGE_INIT				(1.0)	/* including initial planning */
+
+#define BUFFER_STATS_COUNT 3
