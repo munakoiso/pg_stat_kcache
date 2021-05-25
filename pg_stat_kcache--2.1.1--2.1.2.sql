@@ -60,7 +60,9 @@ CREATE FUNCTION pgsk_exclude_key(
 AS 'MODULE_PATHNAME', 'pgsk_exclude_key'
     LANGUAGE C STRICT;
 
-CREATE FUNCTION pgsk_get_excluded_keys() RETURNS SETOF text
+CREATE FUNCTION pgsk_get_excluded_keys(
+    OUT excluded_key text
+)
 AS 'MODULE_PATHNAME', 'pgsk_get_excluded_keys'
     LANGUAGE C STRICT;
 
@@ -68,3 +70,11 @@ CREATE FUNCTION pgsk_reset_excluded_keys()
     RETURNS void
 AS 'MODULE_PATHNAME', 'pgsk_reset_excluded_keys'
     LANGUAGE C STRICT;
+
+CREATE FUNCTION pgsk_get_buffer_stats(
+    OUT saved_strings_count     integer,
+    OUT available_strings_count integer,
+    OUT current_buffer_fullness integer
+) STRICT
+AS 'MODULE_PATHNAME', 'pgsk_get_buffer_stats'
+    LANGUAGE C;
