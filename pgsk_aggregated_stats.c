@@ -372,6 +372,7 @@ pop_key(int bucket, int key_in_bucket) {
     bool found;
     int i;
     int id;
+    int usage;
     /* pgskIdFromString* id_pointer; */
     pgskStringFromId *string_struct;
     pgskCountersHtabValue *elem;
@@ -391,22 +392,24 @@ pop_key(int bucket, int key_in_bucket) {
     key.bucket = bucket;
     elem = hash_search(counters_htab, (void *) &key, HASH_FIND, &found);
     if (found) {
-        elem->counters.usage -= 1;
+        usage = (int)(elem->counters.usage + 0.5);
+        elem->counters.usage = 0;
         for (i = 0; i < global_variables->keys_count; ++i) {
             index = bucket * global_variables->max_strings_count + key_in_bucket;
             id = global_variables->buckets[index].keys.keyValues[i];
+            if (id == comment_value_not_specified) {
+                continue;
+            }
             string_struct = hash_search(id_to_string, (void *) &id, HASH_FIND, &found);
-            string_struct->counter -= 1;
-            if (string_struct->counter == 0 && id != comment_value_not_specified) {
+            string_struct->counter -= usage;
+            if (string_struct->counter == 0) {
                 hash_search(id_to_string, (void *) &id, HASH_REMOVE, &found);
                 hash_search(string_to_id, (void *) string_struct->string, HASH_REMOVE, &found);
                 global_variables->currents_strings_count -= 1;
             }
         }
 
-        if (fabs(elem->counters.usage) < 1e-5) {
-            elem = hash_search(counters_htab, (void *) &key, HASH_REMOVE, &found);
-        }
+        elem = hash_search(counters_htab, (void *) &key, HASH_REMOVE, &found);
     }
     LWLockRelease(&global_variables->lock);
 }
