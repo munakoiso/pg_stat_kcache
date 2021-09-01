@@ -184,7 +184,9 @@ pgsk_store_aggregated_counters(pgskCounters* counters, QueryDesc* queryDesc) {
     elem->counters.stime += counters->stime;
     elem->counters.in_network += strlen(queryDesc->sourceText);
 #if PG_VERSION_NUM >= 110000
-    elem->counters.out_network += TupleDescSize(queryDesc->tupDesc) * queryDesc->totaltime->ntuples;
+    if (queryDesc->totaltime != NULL) {
+        elem->counters.out_network += TupleDescSize(queryDesc->tupDesc) * queryDesc->totaltime->ntuples;
+    }
 #endif
 
 #ifdef HAVE_GETRUSAGE
