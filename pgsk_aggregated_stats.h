@@ -16,7 +16,7 @@
 #include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "catalog/pg_type.h"
-
+#include "pg_time_buffer.h"
 #include "pg_stat_kcache_constants.h"
 
 /*
@@ -83,22 +83,16 @@ typedef struct pgskCountersHtabValue {
 } pgskCountersHtabValue;
 
 typedef struct global_info {
-    int bucket;
     char commentKeys[max_parameters_count][max_parameter_length];
-    char excluded_keys[max_parameter_length][max_parameter_length];
+    char excluded_keys[max_parameters_count][max_parameter_length];
     int excluded_keys_count;
-    int bucket_fullness[actual_buckets_count];
     int keys_count;
     int currents_strings_count;
-    int max_strings_count;
+    int items_count;
     int bucket_duration;
-    int required_max_strings_count;
+    int strings_overflow_by;
     LWLock lock;
-    LWLock reset_lock;
-    TimestampTz init_timestamp;
-    TimestampTz last_update_timestamp;
     bool max_strings_count_achieved;
-    bool bucket_is_full;
     pgskBucketItem buckets[FLEXIBLE_ARRAY_MEMBER];
 } GlobalInfo;
 

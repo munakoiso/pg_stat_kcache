@@ -4,7 +4,7 @@
 #define min_time_interval 600
 #define buckets_count 100
 #define actual_buckets_count 105
-#define max_parameter_length 256
+#define max_parameter_length 64
 #define max_parameters_count 5
 #define comment_key_not_specified -1
 #define comment_value_not_specified 0
@@ -19,4 +19,4 @@
 #define USAGE_DEALLOC_PERCENT	5		/* free this % of entries at once */
 #define USAGE_INIT				(1.0)	/* including initial planning */
 
-#define BUFFER_STATS_COUNT 3
+#define BUFFER_STATS_COUNT 2
