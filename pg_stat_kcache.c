@@ -221,7 +221,7 @@ _PG_init(void) {
 
     pgsk_register_bgworker();
     define_custom_variables();
-    buffer_size = buffer_size_mb * 1e6;
+    buffer_size = buffer_size_mb * 1024 * 1024;
 
 	EmitWarningsOnPlaceholders("pg_stat_kcache");
 

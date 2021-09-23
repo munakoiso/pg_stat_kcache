@@ -73,8 +73,9 @@ AS 'MODULE_PATHNAME', 'pgsk_reset_excluded_keys'
 
 CREATE FUNCTION pgsk_get_buffer_stats(
     OUT saved_strings_count     integer,
-    OUT available_strings_count integer,
-    OUT current_buffer_fullness integer
+    OUT available_strings_count integer
 ) STRICT
 AS 'MODULE_PATHNAME', 'pgsk_get_buffer_stats'
     LANGUAGE C;
+
+select * from pgsk_get_excluded_keys();
